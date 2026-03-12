@@ -5,18 +5,24 @@ Two chemicals react forever. F and k parameters drift slowly between
 named regimes (spirals, chaos, waves, worms...) — the world morphs
 from one type of behavior to another without ever stopping.
 
-Controls:
+Controls (normal mode):
   U     — like this era  (saved to ratings, biases future choices)
   D     — dislike this era
   S     — force an immediate regime shift
   Space — pause / unpause
   Q     — quit
+
+Controls (screensaver mode, --screensaver):
+  U/D   — rate this era (toast shows, saves rating)
+  S     — force regime shift
+  Space / Escape / any mouse movement — exit
 """
 
 import sys
 import time
 import json
 import os
+import argparse
 import numpy as np
 import pygame
 from jax import random
@@ -204,14 +210,21 @@ def pick_new_regime():
 
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
-def run():
+def run(screensaver=False):
     screen = init_window()
     clock  = pygame.time.Clock()
     pygame.font.init()
 
-    print("\nStarting Somnivex — Gray-Scott reaction-diffusion.")
-    print("U=like  D=dislike  S=shift now  Space=pause  Q=quit")
-    print("(First frame takes a few seconds — JAX compiling. Normal.)\n")
+    if screensaver:
+        pygame.mouse.set_visible(False)
+        mouse_origin = pygame.mouse.get_pos()
+        MOUSE_THRESHOLD = 10   # pixels of movement before exit
+        print("\nStarting Somnivex — SCREENSAVER MODE.")
+        print("U=like  D=dislike  S=shift  Space/Escape/mouse = exit\n")
+    else:
+        print("\nStarting Somnivex — Gray-Scott reaction-diffusion.")
+        print("U=like  D=dislike  S=shift now  Space=pause  Q=quit")
+        print("(First frame takes a few seconds — JAX compiling. Normal.)\n")
 
     # Compile the step function once — reused forever
     _step_fn   = make_gs_step_fn(GS_STEPS_PER_FRAME)
@@ -221,15 +234,30 @@ def run():
 
     while True:
 
+        # ── Mouse-move exit (screensaver mode) ────────────────────────────────
+        if screensaver:
+            mx, my = pygame.mouse.get_pos()
+            ox, oy = mouse_origin
+            if abs(mx - ox) > MOUSE_THRESHOLD or abs(my - oy) > MOUSE_THRESHOLD:
+                pygame.quit(); sys.exit()
+
         # ── Events ────────────────────────────────────────────────────────────
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit(); sys.exit()
+            if event.type == pygame.MOUSEMOTION and screensaver:
+                mx, my = event.pos
+                ox, oy = mouse_origin
+                if abs(mx - ox) > MOUSE_THRESHOLD or abs(my - oy) > MOUSE_THRESHOLD:
+                    pygame.quit(); sys.exit()
             if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_q:
+                if screensaver and event.key in (pygame.K_SPACE, pygame.K_ESCAPE):
                     pygame.quit(); sys.exit()
 
-                if event.key == pygame.K_SPACE:
+                if not screensaver and event.key == pygame.K_q:
+                    pygame.quit(); sys.exit()
+
+                if not screensaver and event.key == pygame.K_SPACE:
                     paused = not paused
                     log("Paused" if paused else "Resumed")
 
@@ -388,4 +416,8 @@ def run():
 
 
 if __name__ == "__main__":
-    run()
+    parser = argparse.ArgumentParser(description="Somnivex — autonomous generative art screensaver")
+    parser.add_argument("--screensaver", action="store_true",
+                        help="Run in screensaver mode: hide cursor, exit on any input")
+    args = parser.parse_args()
+    run(screensaver=args.screensaver)

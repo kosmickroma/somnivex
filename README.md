@@ -96,13 +96,21 @@ This project is actively developed. Here's where it's going:
 After you rate ~200 pieces (U/D), a small neural network (MLP via Flax) trains on your ratings and biases the random parameter sampling toward what you actually like. Your screensaver slowly learns your taste over weeks of use.
 
 ### Phase 3 — NCA Blending
-Neural Cellular Automata — a trainable version of reaction-diffusion — will be trained alongside the preference model and blended in as a second layer. The NCA learns patterns the GS system can't produce on its own. Both systems run simultaneously and are mixed in the final render.
+Neural Cellular Automata — a trainable version of reaction-diffusion — runs alongside the GS simulation and blends into the final render. NCA weights are steered by the preference model, so the system learns to grow patterns in styles you like. This is how the neuron/slime-mold/crystal morphologies become achievable — GS sets the foundation, NCA learns the specific shapes.
 
-### Phase 4 — True Screensaver Integration
-Native GNOME screensaver integration: activates automatically on idle, deactivates on any input, runs on both monitors independently.
+### Phase 4 — Daemon + GNOME Integration
+Background daemon that activates automatically on GNOME idle and exits on any input. Each monitor can run independently with its own palette and render mode.
 
 ### Phase 5 — Gallery + Review App
 Each visually interesting moment is saved as a PNG + JSON. A lightweight review interface lets you rate pieces after the fact. Rated pieces feed back into the preference model.
+
+---
+
+## Color System
+
+117 hand-crafted palettes across 15 categories: space/celestial, ocean/water, geological/mineral, biological/cellular, industrial, atmospheric, fire variations, digital/terminal, fantasy, neon/electric, moody/desaturated, high contrast, warm/fire, cool/ice, and nature/organic.
+
+Planned: procedural palette generation, 8-color gradients, palettes that respond to what the chemistry is doing in real time.
 
 ---
 

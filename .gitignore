@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Runtime files — personal data, not for repo
+ratings_log.json
+somnivex.log
+
+# Media — too large for git
+*.mp4
+*.avi
+*.mkv
+*.png
+*.jpg
+*.jpeg
+
+# Gallery saved pieces (user-specific)
+gallery/pieces/
+
+# JAX / XLA cache
+.jax_cache/
+/tmp/
+
+# Environment
+.env
+*.env
+ai-env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~

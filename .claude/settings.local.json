@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \"import torch; print\\('PyTorch:', torch.__version__\\); print\\('CUDA available:', torch.cuda.is_available\\(\\)\\); print\\('CUDA device:', torch.cuda.get_device_name\\(0\\) if torch.cuda.is_available\\(\\) else 'N/A'\\)\" 2>/dev/null || echo \"PyTorch not installed\")",
+      "Bash(python3 --version && pip list 2>/dev/null | grep -iE \"jax|flax|torch|pygame|opengl|numpy|pillow|opencv\" | head -30)",
+      "Bash(xrandr --query 2>/dev/null | grep \" connected\")",
+      "Bash(xscreensaver --version 2>/dev/null || echo \"xscreensaver not installed\")",
+      "WebSearch",
+      "WebFetch(domain:distill.pub)",
+      "WebFetch(domain:www.mrob.com)",
+      "WebFetch(domain:neuralpatterns.io)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:chakazul.github.io)",
+      "WebFetch(domain:mrob.com)",
+      "WebFetch(domain:dynca.github.io)",
+      "WebFetch(domain:arxiv.org)",
+      "WebFetch(domain:www.karlsims.com)",
+      "WebFetch(domain:znah.net)",
+      "Bash(git config:*)",
+      "Bash(source /home/kk/ai-env/bin/activate && python -c \"import main; print\\('OK'\\)\" 2>&1 | tail -2)"
+    ]
+  }
+}

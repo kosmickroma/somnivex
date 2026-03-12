@@ -70,23 +70,30 @@ def inject_gs_noise(B, key, n_pokes, patch_size):
 
 
 def restore_gs_fields(A, B, key, n_patches=20):
-    """
-    Fix over-saturation: B has flooded the whole grid (yellow/solid screen).
-
-    The problem: B spread everywhere, consumed all A, now nothing reacts.
-    The fix: carve out patches where A=1.0 and B=0.0 — restore the substrate.
-    The edges of these cleared patches immediately react with surrounding B,
-    creating new reaction fronts. The pattern rebuilds from those edges.
-
-    This is NOT a full reset — the surrounding B structure is preserved.
-    It's more like punching holes in the flood so the reaction can restart.
-    """
+    """Small blast — used by stale detector to fix a flooded/dead grid."""
     H, W = B.shape
     for _ in range(n_patches):
         key, sk1, sk2, sk3 = random.split(key, 4)
         y  = int(random.randint(sk1, (), 0, H - 16))
         x  = int(random.randint(sk2, (), 0, W - 16))
         sz = int(random.randint(sk3, (), 8, 16))
+        A  = A.at[y:y+sz, x:x+sz].set(1.0)
+        B  = B.at[y:y+sz, x:x+sz].set(0.0)
+    return A, B, key
+
+
+def drift_reinit(A, B, key):
+    """
+    Aggressive regime-change blast — clears ~40% of the grid with large patches.
+    Small patches (restore_gs_fields) only clear ~5% and worms grow straight back.
+    Large patches give the new chemistry real territory to establish itself.
+    """
+    H, W = B.shape
+    for _ in range(30):
+        key, sk1, sk2, sk3 = random.split(key, 4)
+        y  = int(random.randint(sk1, (), 0, H - 40))
+        x  = int(random.randint(sk2, (), 0, W - 40))
+        sz = int(random.randint(sk3, (), 20, 40))
         A  = A.at[y:y+sz, x:x+sz].set(1.0)
         B  = B.at[y:y+sz, x:x+sz].set(0.0)
     return A, B, key
@@ -243,9 +250,7 @@ def run():
                     w['render_mode'] = new_render_mode
                     w['effect']      = new_effect
                     w['last_drift']  = time.time()
-                    w['A'], w['B'], w['jax_key'] = restore_gs_fields(
-                        w['A'], w['B'], w['jax_key'], n_patches=DRIFT_BLAST_PATCHES
-                    )
+                    w['A'], w['B'], w['jax_key'] = drift_reinit(w['A'], w['B'], w['jax_key'])
                     log(f"  Shifting → {name} (f={tf}, k={tk}) | {new_pal_name} / {new_render_mode}+{new_effect}")
 
                 if event.key == pygame.K_u:
@@ -267,7 +272,10 @@ def run():
             new_pal_name    = np.random.choice(list(PALETTES.keys()))
             new_render_mode = np.random.choice(RENDER_MODES)
             new_effect      = np.random.choice(EFFECTS)
+            w['regime_name']        = name
             w['target_regime_name'] = name
+            w['f']           = tf    # snap immediately so chemistry actually changes
+            w['k']           = tk
             w['target_f']    = tf
             w['target_k']    = tk
             w['target_pal']  = np.array(PALETTES[new_pal_name], dtype=np.float32)
@@ -275,9 +283,7 @@ def run():
             w['render_mode'] = new_render_mode
             w['effect']      = new_effect
             w['last_drift']  = time.time()
-            w['A'], w['B'], w['jax_key'] = restore_gs_fields(
-                w['A'], w['B'], w['jax_key'], n_patches=DRIFT_BLAST_PATCHES
-            )
+            w['A'], w['B'], w['jax_key'] = drift_reinit(w['A'], w['B'], w['jax_key'])
             log(f"  Drifting → {name} (f={tf}, k={tk}) | {new_pal_name} / {new_render_mode}+{new_effect}")
 
         # ── F/K smooth drift ──────────────────────────────────────────────────

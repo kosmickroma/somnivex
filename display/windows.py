@@ -115,7 +115,7 @@ def _auto_levels(heat, cache_key):
         _levels_cache[cache_key] = (lo, hi, _levels_frame[0])
     else:
         lo, hi, _ = cached
-    if hi - lo < 0.01:
+    if hi - lo < 0.002:
         return heat
     return np.clip((heat - lo) / (hi - lo), 0, 1)
 

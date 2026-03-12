@@ -19,6 +19,12 @@ somnivex.log
 *.jpg
 *.jpeg
 
+# Demo video — keep this one
+!videos/demos/somnivex-demo.mp4
+
+# Screenshots — keep these
+!screenshots/*.png
+
 # Gallery saved pieces (user-specific)
 gallery/pieces/
 
@@ -36,3 +42,4 @@ ai-env/
 .idea/
 *.swp
 *~
+videos/

@@ -28,7 +28,9 @@
       "Bash(xscreensaver --help 2>&1 | head -50)",
       "Bash(systemctl --user list-units | grep -i screen)",
       "Bash(dbus-send --system --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.ListActivatableNames 2>&1 | grep -i screen)",
-      "Bash(for path:*)"
+      "Bash(for path:*)",
+      "Bash(find /home/kk/projects/ml/somnivex -name *.mp4)",
+      "Read(//home/kk/Videos/**)"
     ]
   }
 }

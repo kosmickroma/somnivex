@@ -1,7 +1,7 @@
 # Somnivex
 *somnium (dream) + texere (to weave) — dream weave*
 
-**Autonomous generative art that lives on your screen.**
+**Autonomous generative art. Runs forever. Never repeats.**
 
 [![Watch the demo](https://img.youtube.com/vi/buNGsdpu__8/maxresdefault.jpg)](https://www.youtube.com/watch?v=buNGsdpu__8)
 
@@ -10,15 +10,17 @@
 | ![](screenshots/rings_pink.png) | ![](screenshots/chromatic_spots.png) | ![](screenshots/neon_rings.png) |
 | ![](screenshots/gold_channels.png) | ![](screenshots/fingerprint_green.png) | ![](screenshots/rings_dark_pink.png) |
 
-Somnivex is an open-source screensaver built on Gray-Scott reaction-diffusion — a mathematical model of two chemicals that react and spread across a grid. The tension between them produces spirals, worms, coral, chaos, and everything in between. It runs forever, never repeats, and slowly morphs from one visual character to another without ever stopping.
+Somnivex is an open-source generative art system with two layers: a Gray-Scott reaction-diffusion simulation running on GPU, and a trained Neural Cellular Automaton that learned GS physics and now runs freely on its own output — producing patterns that blend and morph between regimes in ways no fixed simulation can. Spirals dissolve into worms. Diamonds collapse into swirls. It finds its own path.
 
-No prompts. No inputs. Just autonomous beauty.
+No prompts. No inputs. Just autonomous behavior.
 
 ---
 
 ## What it looks like
 
-The simulation runs 15 distinct behavioral regimes — spirals, maze, fingerprint, bacteria, uskate world, and more — each producing a completely different class of pattern. Overlaid on that are 117 color palettes, 5 rendering modes (each reads the simulation differently), and 6 post-processing effects. The world drifts between regimes every few minutes, and the visual style shifts with it.
+**Phase 1 (Gray-Scott):** 15 distinct behavioral regimes — spirals, maze, fingerprint, bacteria, uskate world, and more. 117 color palettes, 5 rendering modes, 6 post-processing effects. The world drifts between regimes every few minutes.
+
+**Phase 2 (NCA Free Run):** A neural network trained on Gray-Scott physics runs entirely on its own output. It knows all 15 regimes simultaneously — f and k control channels steer it, but it blends and interprets them through its own learned weights. Diamonds that evolve into ovals. Swirls that emerge from the collapse of structure. Things GS alone never does.
 
 **Rendering modes** — same chemistry, completely different image:
 - `B` — raw chemical concentration (classic)
@@ -38,59 +40,79 @@ The simulation runs 15 distinct behavioral regimes — spirals, maze, fingerprin
 
 **Mirrored dual screen** — one wide window spanning two monitors, same image on both. Set `DUAL_SCREEN = True` in `config.py`.
 
-**Independent dual screen** *(coming)* — different palette and render mode per monitor. This is on the roadmap but not yet implemented.
-
-> ⚠️ **GPU note:** Dual screen mode is optimized (renders once, blits twice) but the simulation is still GPU-heavy. Tested on a GTX 1650 at 15fps. If your GPU fan spins up, that's normal — dial down `GS_STEPS_PER_FRAME` in `config.py` to ease the load.
-
 ---
 
 ## Running it
 
-> **Tested on Linux (Ubuntu 24.04) only.** It may work on macOS or Windows but has not been tested. CUDA is required for GPU mode — CPU-only will work but will be slower.
+> **Tested on Linux (Ubuntu 24.04) only.** CUDA required for GPU mode — CPU-only works but slower.
 
 ```bash
 # Clone and set up
 git clone https://github.com/kosmickroma/somnivex
 cd somnivex
-pip install jax[cuda] flax pygame numpy
+pip install jax[cuda] flax optax pygame numpy
 
-# Run
+# Run Gray-Scott screensaver (Phase 1)
 python main.py
+
+# Run NCA free run (Phase 2 — requires trained checkpoint)
+python nca/run_free.py
 ```
 
-**Controls while running:**
+**GS Controls:**
 | Key | Action |
 |-----|--------|
-| `U` | Like this era — biases future picks toward this style |
-| `D` | Dislike this era |
-| `S` | Skip to next regime now |
+| `U` | Like this era |
+| `D` | Dislike |
+| `S` | Skip to next regime |
 | `Space` | Pause / unpause |
 | `Q` | Quit |
 
-### Screensaver mode
+**NCA Controls:**
+| Key | Action |
+|-----|--------|
+| `F` | Cycle GS regime (poke the control channels) |
+| `R` | Reset grid with new random seed |
+| `P` | Cycle color palette |
+| `Q` | Quit |
 
-A keyboard shortcut launches it as a real screensaver — cursor hides, exits on Space, Escape, or any mouse movement. U/D/S still work inside screensaver mode.
+### Screensaver mode
 
 ```bash
 python main.py --screensaver
 ```
 
-On GNOME (Linux) you can bind this to a keyboard shortcut via Settings → Keyboard → Custom Shortcuts.
+On GNOME you can bind this to a keyboard shortcut via Settings → Keyboard → Custom Shortcuts.
 
 ---
 
 ## How it works
 
-**Gray-Scott reaction-diffusion** — two chemicals A (food) and B (predator) obey:
+### Layer 1 — Gray-Scott reaction-diffusion
+
+Two chemicals A (food) and B (predator) obey:
 
 ```
 dA/dt = Da·∇²A − A·B² + f·(1−A)
 dB/dt = Db·∇²B + A·B² − (f+k)·B
 ```
 
-`f` (feed rate) and `k` (kill rate) determine everything. The simulation drifts between 15 named parameter regimes from Pearson's 1993 catalog, morphing patterns instead of resetting. When a regime shift happens, the old structure is physically broken up so new chemistry can grow in.
+`f` (feed rate) and `k` (kill rate) determine everything. The simulation runs 15 named parameter regimes from Pearson's 1993 catalog, morphing between them instead of resetting hard. Grid is 256×256 on GPU via JAX. ~900 reaction steps per second.
 
-The grid is 256×256, computed on GPU via JAX. About 900 reaction steps per second. Rendering scales up to 1920×1080.
+### Layer 2 — Neural Cellular Automaton
+
+A small neural network (17,000 parameters) runs the same update rule on every cell of the grid simultaneously. Each cell sees its 3×3 neighborhood through 4 fixed perception filters (identity, Sobel X, Sobel Y, Laplacian) — 64 inputs total. The network outputs a delta — how much to nudge each of the cell's 16 state channels.
+
+16 channels per cell:
+- `0` — chemical A
+- `1` — chemical B
+- `2–13` — hidden state (the NCA decides what to use these for)
+- `14` — feed rate f (control input)
+- `15` — kill rate k (control input)
+
+**Training:** Pool-based multi-step rollout. A pool of 512 live GS states (random regimes, random ages) is maintained. Each training step: sample 32 states → run NCA 8 steps on its own output → compare to GS running 8 steps from the same start → backprop → write NCA outputs back to pool. 50,000 steps total (~4 hours on a GTX 1650).
+
+The result: one model that internalized all 15 GS regimes simultaneously. Changing f and k mid-run changes its behavior without restarting anything — the NCA reads the control channels every step and responds. But it also has its own interpretation of those physics, expressed through its hidden channels. That's where the non-GS behavior comes from.
 
 ---
 
@@ -100,9 +122,9 @@ Tested on:
 - GPU: NVIDIA GTX 1650 (4GB VRAM) — CUDA 13.1
 - CPU: Intel i7-2600
 - OS: Ubuntu 24.04
-- Python 3.12 + JAX + Flax + Pygame
+- Python 3.12 + JAX + Flax + Optax + Pygame
 
-Should run on any CUDA GPU. CPU-only mode works too (slower).
+Should run on any CUDA GPU. CPU-only works (slower).
 
 ---
 
@@ -110,40 +132,41 @@ Should run on any CUDA GPU. CPU-only mode works too (slower).
 
 117 hand-crafted palettes across 15 categories: space/celestial, ocean/water, geological/mineral, biological/cellular, industrial, atmospheric, fire variations, digital/terminal, fantasy, neon/electric, moody/desaturated, high contrast, warm/fire, cool/ice, and nature/organic.
 
-Planned: procedural palette generation, 8-color gradients, palettes that respond to what the chemistry is doing in real time.
-
 ---
 
 ## Roadmap
 
-### ✅ Phase 1 — Complete
-Gray-Scott simulation on GPU, 15 regimes, 117 palettes, 5 render modes, 6 effects, dual screen mirroring, screensaver mode with keyboard shortcut, preference rating system (U/D).
+### ✅ Phase 1 — Gray-Scott Screensaver
+GPU simulation, 15 regimes, 117 palettes, 5 render modes, 6 effects, dual screen, screensaver mode, preference rating system.
 
-### Phase 2 — Preference Learning
-After you rate ~200 pieces (U/D), a small neural network (MLP via Flax) trains on your ratings and biases the random parameter sampling toward what you actually like. Your screensaver slowly learns your taste over weeks of use.
+### ✅ Phase 2 — NCA Physics Training
+Neural Cellular Automaton trained on GS physics via pool-based multi-step rollout. Runs freely on its own output indefinitely. One model covers all 15 regimes via control channels. Produces patterns that blend and morph between GS behaviors in novel ways.
 
-### Phase 3 — NCA Blending
-Neural Cellular Automata — a trainable version of reaction-diffusion — runs alongside the GS simulation and blends into the final render. NCA weights are steered by the preference model, so the system learns to grow patterns in styles you like. This is how more complex morphologies become achievable — neuron-like structures, slime mold, crystal growth — GS sets the foundation, NCA learns the specific shapes.
+### Phase 3 — Autonomous Steering
+The NCA steers itself. Saturation detection notices when patterns collapse to uniform and nudges the control channels to escape. Slow autonomous drift walks f and k through the parameter space over time — patterns transform gradually instead of snapping. No human intervention required for indefinite interesting output.
 
-### Phase 4 — Daemon + Auto-launch
-Background daemon that activates automatically on system idle and exits on any input. Each monitor runs independently with its own palette and render mode.
+### Phase 4 — Expanded Physics
+Train the NCA on additional reaction-diffusion systems alongside GS — Turing patterns, Lenia, or others. With multiple physics in the training data, the NCA blends them together in free run, producing morphologies that no single system generates alone.
 
-### Phase 5 — Gallery + Review App
-Each visually interesting moment is saved as a PNG + JSON. A lightweight review interface lets you rate pieces after the fact. Rated pieces feed back into the preference model.
+### Phase 5 — Color Intelligence
+Color as part of the NCA's state, not a post-processing lookup. The network learns associations between chemical patterns and color expressions during training. In free run it chooses and evolves its own palette based on what it's doing.
+
+### Phase 6 — Livestream Output
+24/7 autonomous generative art stream. The system runs indefinitely, steers itself away from dead states, and pipes output to OBS. No human needed.
 
 ---
 
 ## Philosophy
 
-Most generative art tools require you to prompt them. Somnivex runs without any input — it decides everything and shows you the result. You only provide signal (like/dislike) about what it already made. Over time the system builds a model of your taste and steers toward it automatically.
+Somnivex is not a tool you operate. It runs on its own, decides everything, and shows you what it made. The only input you can give is signal — like or dislike — and over time the system steers toward what you respond to.
 
-The goal is a screensaver that functions as a living piece of art that knows you.
+The longer-term goal is a system that is genuinely autonomous: one that explores its own parameter space, discovers novel visual states, and sustains itself indefinitely without intervention. The NCA is the first step toward that — a model that learned physics from data and now runs those physics from memory, finding paths through the space that the original equations never would.
 
 ---
 
 ## Contact
 
-Questions, bugs, ideas — open an issue or reach out directly:
+Questions, bugs, ideas — open an issue or reach out:
 📧 kosmickroma@gmail.com
 
 ---

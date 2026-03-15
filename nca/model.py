@@ -1,129 +1,107 @@
-# nca/model.py — NCA engine.
-# A grid of cells each with 16 numbers describing their state.
-# Every step: perceive neighbors → tiny neural net → update state.
-# Iterate thousands of times → complex emergent patterns with no explicit rules.
+# nca/model.py - Neural Cellular Automata cell update rule.
+# 
+# Every cell in the grid runs this same tiny neural network every step. 
+# Input: what the cell can "see" (its 3x3 neighborhood through 4 filters)
+# Output: a delta - how much to nudge each of the cell's 16 channels.
+#
+# This file defines:
+# - The channel layout (which slot means what)
+# - The 4 fixed perception filters (the cell's "senses")
+# - The UpdateNet neural network (the cell's "brain")
+# - One NCA step function
+# - A JIT-compiled step factory for efficiency
 
 import jax
 import jax.numpy as jnp
 from jax import random, lax
 import flax.linen as nn
 
-# ── Constants ─────────────────────────────────────────────────────────────────
-N_CHANNELS   = 16     # state values per cell (4 visible + 12 hidden)
-N_FILTERS    = 4      # perception filters: identity, sobel_x, sobel_y, laplacian
-HIDDEN_SIZE  = 128    # neurons in the update net hidden layer
-ALIVE_THRESH = 0.1    # alpha above this = cell is alive
-FIRE_RATE    = 0.75   # probability any cell actually updates each step
-                      # stochastic async = organic irregular feel vs rigid wave-fronts
+# --- Channel layout: ------------------
+# Each cell carries 16 floating-point values ("channels").
+# We've assigned meaning to specific slots:
 
+N_CHANNELS = 16 # total state values per cell
 
-# ── Grid initialization ───────────────────────────────────────────────────────
-def init_grid(key, H, W):
-    """
-    5 seed modes — picked randomly each world startup.
-    Mode 4 (global_noise) is new: fills the whole grid with sparse random values
-    so the world wakes up everywhere at once instead of growing from one point.
-    """
-    grid = jnp.zeros((H, W, N_CHANNELS))
-    key, sk = random.split(key)
-    mode = int(random.randint(sk, (), 0, 5))
+CH_A = 0 # Gray-Scott chemical A 
+CH_B = 1 # Gray-Scott chemical B
+# Channels 2-13 are "hidden" channels that the NCA can use for internal computations.
+# Nobody tells it. Training decides. This is where the magic happens.
+CH_F = 14 # feed rate (f) - written in from outside before each step
+CH_K = 15 # kill rate (k) - written in from outside before each step
 
-    if mode == 0:
-        # Center patch — classic, grows outward from middle
-        shape_name = "patch"
-        cx, cy = W // 2, H // 2
-        r = 8
-        key, sk = random.split(key)
-        patch = random.uniform(sk, (r*2, r*2, N_CHANNELS))
-        patch = patch.at[:, :, 3].set(0.5)
-        grid  = grid.at[cy-r:cy+r, cx-r:cx+r, :].set(patch)
+# During training:  we set grid[:, :, CH_F] = f  and  grid[:, :, CH_K] = k
+# The NCA reads these each step and learns to behave differently based on them.
+# This is how one trained model covers all 15 GS regimes.
 
-    elif mode == 1:
-        # Single point — very slow careful growth from one cell
-        shape_name = "point"
-        key, sk = random.split(key)
-        seed = random.uniform(sk, (1, 1, N_CHANNELS))
-        seed = seed.at[:, :, 3].set(1.0)
-        grid = grid.at[H//2, W//2, :].set(seed[0, 0])
+# --- Perception constants: ---------------
+N_FILTERS = 4 # identity + sobel_x + sobel_y + laplacian
+HIDDEN_SIZE = 128 # number of hidden channels in the UpdateNet
+FIRE_RATE = 0.5 # fraction of cells that actually update each step
+                # 0.5 = stochastic async: forces robustness to neighbor timing
 
-    elif mode == 2:
-        # Ring — growth happens inward AND outward simultaneously
-        shape_name = "ring"
-        cx, cy, r = W//2, H//2, 30
-        ys = jnp.arange(H)
-        xs = jnp.arange(W)
-        yy, xx = jnp.meshgrid(ys, xs, indexing='ij')
-        dist  = jnp.sqrt((yy - cy)**2 + (xx - cx)**2)
-        mask  = ((dist > r - 4) & (dist < r + 4)).astype(jnp.float32)
-        key, sk = random.split(key)
-        noise = random.uniform(sk, (H, W, N_CHANNELS)) * mask[:, :, None]
-        noise = noise.at[:, :, 3].set(mask * 0.7)
-        grid  = grid + noise
-
-    elif mode == 3:
-        # Scattered — 8 random seeds, multiple collision fronts
-        shape_name = "scattered"
-        for _ in range(8):
-            key, sk1, sk2 = random.split(key, 3)
-            y = int(random.randint(sk1, (), 10, H - 10))
-            x = int(random.randint(sk2, (), 10, W - 10))
-            key, sk = random.split(key)
-            seed = random.uniform(sk, (6, 6, N_CHANNELS))
-            seed = seed.at[:, :, 3].set(0.6)
-            grid = grid.at[y:y+6, x:x+6, :].set(seed)
-
-    else:
-        # Global noise — whole grid seeded with low sparse values.
-        # The entire world is alive from frame 1. No frontier, no center.
-        # Most "always alive" feeling of all the modes.
-        shape_name = "global_noise"
-        key, sk1, sk2, sk3 = random.split(key, 4)
-        noise = random.uniform(sk1, (H, W, N_CHANNELS)) * 0.12
-        # Sparse alpha: only ~15% of cells start alive so the network
-        # has room to breathe and evolve rather than saturating immediately
-        alive_mask = (random.uniform(sk2, (H, W)) < 0.15).astype(jnp.float32)
-        alpha       = random.uniform(sk3, (H, W)) * 0.4 * alive_mask
-        noise = noise.at[:, :, 3].set(alpha)
-        grid  = noise
-
-    return grid, shape_name
-
-
-# ── Perception kernel ─────────────────────────────────────────────────────────
+# --- Fixed perception kernels: -----------
 def make_perception_kernel():
     """
-    Fixed (non-learned) 3x3 filters — the cell's sensory organs.
-    Each of 4 filters is applied to all 16 channels independently (depthwise).
-    Output per cell: 64 numbers (4 filters × 16 channels).
+    Build the 4 fixed 3x3 filters that define what each cell can "see."
+    These are NOT learned - they're hand-crafted sensory organs.
+    Applied to all 16 channels independently (depthwise convolution).
+    Output per cell: 4 filters x 16 channels = 64 numbers.
 
-    Identity  — what am I right now?
-    Sobel X   — left-right gradient (which way is the concentration higher?)
-    Sobel Y   — up-down gradient
-    Laplacian — am I a local peak or valley vs my neighbors?
-                drives reaction-diffusion style patterns: rings, spirals, spots
+    Identity: what am I right now? (self-state)
+    Sobel X: left-right concentration gradient
+    Sobel Y: up-down concentration gradient
+    Laplacian: am I a local peak or valley vs my neighbors?
+                This directly approximates ∇² - the diffusion term in Gray-Scott.
+                Including it gives the NCA a direct sense of diffusion gradients.
     """
-    identity  = jnp.array([[0, 0, 0], [0, 1, 0], [0, 0, 0]], dtype=jnp.float32)
-    sobel_x   = jnp.array([[-1,0,1],  [-2,0,2],  [-1,0,1]], dtype=jnp.float32) / 8.0
-    sobel_y   = jnp.array([[-1,-2,-1],[0, 0, 0],  [1, 2, 1]], dtype=jnp.float32) / 8.0
-    laplacian = jnp.array([[0,1,0],   [1,-4,1],   [0,1,0]], dtype=jnp.float32) / 4.0
-
-    # Stack to (3,3,4) then tile across N_CHANNELS and reshape for depthwise conv
+    identity = jnp.array([[0, 0, 0],
+                          [0, 1, 0],
+                          [0, 0, 0]], dtype=jnp.float32)
+    
+    sobel_x = jnp.array([[-1, 0, 1],
+                         [-2, 0, 2],
+                         [-1, 0, 1]], dtype=jnp.float32) / 8.0
+    
+    sobel_y = jnp.array([[-1, -2, -1],
+                         [ 0,  0,  0],
+                         [ 1,  2,  1]], dtype=jnp.float32) / 8.0
+    
+    # Standard discrete Laplacian - same weights used in gs/engine.py
+    # (0.05 corners, 0.20 edges, -1 center) approximates the continuous ∇².
+    laplacian = jnp.array([[0.05, 0.20, 0.05],
+                           [0.20, -1.0, 0.20],
+                           [0.05, 0.20, 0.05]], dtype=jnp.float32)
+                           
+    # Stack to (3, 3, 4) - four 3x3 kernels
     kernel = jnp.stack([identity, sobel_x, sobel_y, laplacian], axis=-1)
+
+    # Title across all N_CHANNELS so each filter is applied to every channel
+    # Result: (3, 3, N_CHANNELS * N_FILTERS) = (3, 3, 64)
     kernel = jnp.tile(kernel, (1, 1, N_CHANNELS))
+
+    # Reshape for JAX depthwise conv: (out_channels, 1, kH, kW)
+    # Each output channel has its own kernel, no cross-channel mixing here
     kernel = kernel.transpose(2, 0, 1)
     kernel = kernel[:, jnp.newaxis, :, :]
-    return kernel
+    return kernel # shape: (64, 1, 3, 3)
 
-
-# ── Perception pass ───────────────────────────────────────────────────────────
+# --- Perception pass ----------------
 def perceive(grid, kernel):
     """
-    Apply all filters to all channels. Uses WRAP padding — torus topology,
-    edges connect to opposite edges. No edge bleeding.
-    Input: (H, W, 16) → Output: (H, W, 64)
+    Apply all 4 filters to all 16 channels. WRAP padding = tous topology.
+    No edge artifacts - the grid wraps around like Pac-Man.
+
+    Input: grid (H, W, 16)
+    Output: perceived (H, W, 64) - 64 numbers per cell describing its neighborhood
     """
+    # Rearrange to (batch=1, channels=16, H, W) for JAX conv
     x = grid.transpose(2, 0, 1)[None]
-    x = jnp.pad(x, ((0,0),(0,0),(1,1),(1,1)), mode='wrap')
+
+    # Wrap-pad by 1 pixel on each side so 3x3 convolution covers edges
+    x = jnp.pad(x, ((0, 0), (0, 0), (1, 1), (1, 1)), mode='wrap')
+
+    # Depthwise conv: each of the 64 output channels uses its own 3x3 kernel
+    # feature_group_count=N_CHANNELS means no cross-channel mixing in perception
     out = lax.conv_general_dilated(
         x, kernel,
         window_strides=(1, 1),
@@ -131,65 +109,101 @@ def perceive(grid, kernel):
         feature_group_count=N_CHANNELS,
         dimension_numbers=('NCHW', 'OIHW', 'NCHW')
     )
-    return out[0].transpose(1, 2, 0)  # (H, W, 64)
 
+    # Return as (H, W, 64) - spatial first, features last
+    return out[0].transpose(1, 2, 0)
 
-# ── Update network ────────────────────────────────────────────────────────────
+# --- Update network ----------------
 class UpdateNet(nn.Module):
     """
-    The neural net that IS the NCA rule.
-    Input: 64-number perception → Output: 16-number delta (how to change state).
+    The neural network that IS the NCA rule. One tiny net, shared by every cell.
+    Applied as 1x1 convolution across the grid after the perception step. 
 
-    WHY TANH INSTEAD OF RELU:
-    ReLU only passes positive values → sharp fragmented saturation.
-    tanh outputs -1 to +1 → allows oscillation and negative feedback.
-    Result: wave-like fluid dynamics that keep moving instead of freezing.
+    Input: 64-dim perception vector (what the cell can see)
+    Output: 16-dim delta (how much to change each channel)
+
+    Architecture:
+    Dense(128) + tanh -> Dense(16, zero-init)
+    
+    WHY TANH:
+    tanh outputs [-1, +1], allowing both increases and decreases.
+    Cells need to be able to lower concentrations (inhibition) not just raise them.
+    ReLU (outputs 0+) would kill half the dynamics and cause saturation. 
+    WHY ZERO-INIT ON FINAL LAYER (critical):
+    At the start of training, every cell produces zero delta - no change.
+    This "do nothing prior" means training begings for a stable baseline
+    and incrementally learns to make useful changes.
+    Without it: random initial deltas cause chaos, training is unstable.
+
+    WHY RESIDUAL (delta, not replacement):
+    new_state = old_state + delta
+    This mirrors Gray-Scott's Euler integration: U_new = U + dt * dU
+    The NCA is learning to approximate dU and dV, not U and V directly.
     """
     hidden_size: int = HIDDEN_SIZE
-
+    
     @nn.compact
     def __call__(self, perception):
         x = nn.Dense(self.hidden_size)(perception)
-        x = jnp.tanh(x)                    # ← the one change that matters most
-        x = nn.Dense(N_CHANNELS)(x)
+        x = jnp.tanh(x)
+        
+        # Zero-initializer on weights: final layer starts outputting all zeros.
+        # This is the single most important training stability trick.
+        x = nn.Dense(N_CHANNELS,
+                    kernel_init=nn.initializers.zeros,
+                    bias_init=nn.initializers.zeros)(x)
         return x
 
-
-# ── Single NCA step ───────────────────────────────────────────────────────────
-def nca_step(grid, params, update_net, perception_kernel, key, step_size=1.0):
+# --- Single NCA step ----------------
+def nca_step(grid, params, update_net, perception_kernel, key):
     """
-    perceive → delta → alive mask → fire mask → apply → clip
+    One full NCA update across the entire grid.
+
+    Steps: 
+    1. perceive - each cell reads its neighborhood through 4 filters -> 64 numbers
+    2. update - UpdateNet maps 64 -> 16 delta values
+    3. fire mask - randomly zero out 50% of updates (stochastic async)
+    4. apply - new_grid + delta * fire_mask
+    5. clip - keep all values in [0,1]
+
+    No alive mask, Every cell is always active.
+    Grey-Scott has no concept of "dead" cells - the whole grid is chemically live.
+
+    Returns: (new_grid, new_key)
     """
     H, W, _ = grid.shape
-    perceived = perceive(grid, perception_kernel)
-    delta     = update_net.apply(params, perceived)
 
-    # Alive mask: only update cells where at least one neighbor is alive
-    alpha        = grid[:, :, 3:4]
-    alive        = (alpha > ALIVE_THRESH).astype(jnp.float32)
-    alive_padded = jnp.pad(alive[:, :, 0], 1, mode='wrap')
-    neighbor_max = jnp.zeros((H, W))
-    for dy in range(3):
-        for dx in range(3):
-            neighbor_max = jnp.maximum(neighbor_max, alive_padded[dy:dy+H, dx:dx+W])
-    alive_mask = (neighbor_max > 0.0)[:, :, jnp.newaxis]
+    # Step 1: perception - what does each cell see?
+    perceived = perceive(grid, perception_kernel) # (H, W, 64)
 
-    # Fire mask: stochastic async — 75% of cells update each step
+    # Step 2: compute delta for every cell simultaneously
+    # update_net.apply runs the network as 1x1 conv across the spatial grid
+    delta = update_net.apply(params, perceived) # (H, W, 16)
+
+    # Step 3: stochastic fire mask
+    # Only 50% of cells actually apply their update this step. 
+    # This forces the learned rule to work even when neighbors haven't updated yet.
+    # Think of it like per-cell dropout applied to the update vector.
     key, subkey = random.split(key)
-    fire_mask   = (random.uniform(subkey, (H, W, 1)) < FIRE_RATE).astype(jnp.float32)
+    fire_mask = (random.uniform(subkey, (H, W, 1)) < FIRE_RATE).astype(jnp.float32)
 
-    new_grid = grid + step_size * delta * (alive_mask * fire_mask)
-    new_grid = jnp.clip(new_grid, 0.0, 1.0)
+    # Step 4 + 5: apply delta, clip to valid range
+    new_grid = jnp.clip(grid + delta * fire_mask, 0.0, 1.0)
+
     return new_grid, key
 
 
-# ── JIT-compiled step factory ─────────────────────────────────────────────────
+# --- JIT-compiled step factory --------------------------
 def make_step_fn(update_net, perception_kernel):
-    """
-    Call ONCE at startup. Reuse forever.
-    Every jax.jit() call compiles a new XLA program. One call = no memory leak.
-    """
-    @jax.jit
-    def step(grid, params, key, step_size=1.0):
-        return nca_step(grid, params, update_net, perception_kernel, key, step_size)
-    return step
+        """
+        Call this ONCE at startup. It returns a JIT-compiled step function.
+        Reuse the returned function forever - never call make_step_fn again in the loop.
+        
+        WHY: jax.jit compiles a new XLA program each time it's called on a new function.
+        Calling make_stepfn repeatedly would cause recompilation on every step.
+        One call here = one compilation = reuse forever = no memory leak, full speed.
+        """
+        @jax.jit
+        def step(grid, params, key):
+            return nca_step(grid, params, update_net, perception_kernel, key)
+        return step

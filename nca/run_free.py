@@ -1,12 +1,14 @@
-# nca/run_free.py - Run the trained NCA freely, no GS needed. 
+# nca/run_free.py - Run the trained NCA freely, no GS needed.
 #
-# Loads a trained checkpoint and runs the NCA on its own output forever,
-# This is the test: did it learn enough to sustain itself?
+# Loads a trained checkpoint and runs the NCA on its own output forever.
+# Seeds from a warmed-up GS state so the NCA starts mid-reaction (not blobs).
+# Autonomously drifts f/k over time so it never gets stuck.
+# Auto-detects saturation and nudges the regime to escape.
 #
 # Run from the project root with:
 #     python nca/run_free.py
 #
-# Controls: R=reset F=cycle f value K=cycle k value P=palette Q=quit
+# Controls: R=reset  F=cycle regime  P=palette  Q=quit
 
 import os
 import sys
@@ -24,55 +26,123 @@ from nca.model import(
     CH_A, CH_B, CH_F, CH_K,
     UpdateNet, make_perception_kernel, make_step_fn,
 )
-from gs.engine import GS_REGIMES
+from gs.engine import GS_REGIMES, gs_step, init_gs_grid
 from nca.params import PALETTES
 
 # ── Config ────────────────────────────────────────────────────────────────────
-# Path to the checkpoint we want to load.
-# Change this to any checkpoint in nca/checkpoints/ to compare stages,
 CHECKPOINT = os.path.join(
     os.path.dirname(__file__), 'checkpoints', 'params_050000.pkl'
 )
 
-GRID_H = 256 # run at full resolution - trained at 64x64 but works at any size
-GRID_W = 256 # because all ops are local 3x3 convolutions
-DISPLAY_W = 1920
-DISPLAY_H = 1080 # upscale to fill screen
-FPS = 30
+GRID_H          = 256
+GRID_W          = 256
+SCREEN_W        = 1920  # one monitor width
+SCREEN_H        = 1080
+DUAL_SCREEN     = True  # set False for single monitor
+DISPLAY_W       = SCREEN_W * 2 if DUAL_SCREEN else SCREEN_W
+DISPLAY_H       = SCREEN_H
+FPS             = 30
+STEPS_PER_FRAME = 5   # NCA steps per rendered frame — higher = faster evolution
+
+GS_WARMUP_MIN      = 50    # short warmup = raw early chaos
+GS_WARMUP_MAX      = 800   # long warmup = fully developed structure
+DRIFT_EVERY        = 400   # steps between gentle f/k nudges
+DRIFT_AMOUNT       = 0.004 # size of each nudge
+F_MIN, F_MAX       = 0.01, 0.08
+K_MIN, K_MAX       = 0.04, 0.075
+SATURATION_CHECK   = 150   # steps between saturation checks
+SATURATION_STD     = 0.02  # B std below this = stuck, escape
+
+# Autonomous palette crossfading
+PALETTE_CHANGE_MIN = 1800  # min steps between palette transitions
+PALETTE_CHANGE_MAX = 4000  # max steps between palette transitions
+PALETTE_BLEND_STEPS = 300  # steps to crossfade old → new (~10s at 30fps)
+
+# Extreme regimes — furthest apart in f/k space + beyond training range
+# The NCA has to extrapolate when given values it never trained on
+EXTREME_REGIMES = [
+    ("uskate",       0.010, 0.047),  # lowest f in training set
+    ("coral",        0.060, 0.062),  # highest f in training set
+    ("bacteria",     0.046, 0.065),  # highest k in training set
+    ("beyond_low",   0.005, 0.040),  # below training range — uncharted
+    ("beyond_high",  0.075, 0.070),  # above training range — uncharted
+    ("beyond_wild",  0.008, 0.075),  # extreme diagonal — never seen
+]
+
+# Perturbation sequences — the main exploration mechanic.
+# Every few minutes, poke the control channels 3-6 times with random spacing.
+# Each poke disturbs the pattern mid-reaction. The NCA heals and reorganizes.
+# Space them out — too fast = solid screen. Too slow = nothing happens.
+PERTURB_INTERVAL_MIN = 1500  # min steps between sequences (~50s at 30fps)
+PERTURB_INTERVAL_MAX = 3600  # max steps between sequences (~2min at 30fps)
+PERTURB_POKES_MIN    = 3     # min pokes per sequence
+PERTURB_POKES_MAX    = 6     # max pokes per sequence
+PERTURB_SPACING_MIN  = 5     # min steps between pokes in a sequence
+PERTURB_SPACING_MAX  = 15    # max steps between pokes in a sequence
+
+EXTREME_INTERVAL_MIN = 4000  # min steps between autonomous extreme bursts (~2min)
+EXTREME_INTERVAL_MAX = 9000  # max steps between autonomous extreme bursts (~5min)
+
+RESEED_INTERVAL_MIN  = 8000  # min steps between autonomous reseeds (~4min)
+RESEED_INTERVAL_MAX  = 18000 # max steps between autonomous reseeds (~10min)
+
+# Spatial f/k variation — each cell gets its own f/k from a drifting noise field.
+# Different regions behave in different parameter regimes simultaneously.
+# The whole grid can never collapse to one state because regions are always in
+# different territory. The field drifts slowly — patterns reorganize continuously.
+FK_SPATIAL_AMP_F  = 0.015   # half-amplitude of f variation across grid
+FK_SPATIAL_AMP_K  = 0.010   # half-amplitude of k variation across grid
+FK_PHASE_DRIFT    = 0.0008  # phase advance per NCA step (one full cycle ≈ 7800 steps)
+
+# ── Spatial field ─────────────────────────────────────────────────────────────
+def make_fk_field(H, W, f_center, k_center, phase_fx, phase_fy, phase_kx, phase_ky):
+    """
+    Generate smooth 2D f and k arrays using sum-of-sines.
+    Each cell gets its own f/k — regions live in different parameter regimes.
+    The phase parameters drift slowly over time, shifting which regions get
+    which behavior without any hard transitions.
+    """
+    xs = np.linspace(0, 2 * np.pi, W, endpoint=False)
+    ys = np.linspace(0, 2 * np.pi, H, endpoint=False)
+    xx, yy = np.meshgrid(xs, ys)  # (H, W)
+
+    # Two overlapping sine waves per field — different frequencies and angles
+    # so the resulting pattern has interesting large-scale structure
+    f_noise = (
+        np.sin(xx * 1.3 + phase_fx) * np.cos(yy * 0.9 + phase_fy) * 0.6 +
+        np.cos(xx * 0.7 + phase_fy * 0.5) * np.sin(yy * 1.1 + phase_fx * 0.7) * 0.4
+    )  # range roughly -1 to 1
+
+    k_noise = (
+        np.sin(xx * 0.8 + phase_kx + 1.0) * np.cos(yy * 1.2 + phase_ky) * 0.6 +
+        np.cos(xx * 1.1 + phase_ky * 0.4) * np.sin(yy * 0.7 + phase_kx * 0.8) * 0.4
+    )
+
+    f_field = np.clip(f_center + f_noise * FK_SPATIAL_AMP_F, F_MIN, F_MAX).astype(np.float32)
+    k_field = np.clip(k_center + k_noise * FK_SPATIAL_AMP_K, K_MIN, K_MAX).astype(np.float32)
+    return f_field, k_field
 
 # ── Grid initialization ───────────────────────────────────────────────────────
 def init_nca_grid(key, H, W, f, k):
     """
-    Build a fresh 256x256 NCA grid.
-    
-    Channels 0 (A) and 1 (B) are seeded like a GS grid - A=1 everywhere
-    with tiny noise, B=0 with a few random patches to spark reactions.
-    Channels 2-13 are zero (hidden state, NCA will fill these in).
-    Channels 14 (f) and 15 (k) are set to the current control values.
-    
-    This gives the NCA a familiar starting state - the same kind of state
-    it saw thousands of times during training.
+    Build a fresh NCA grid seeded from a warmed-up GS simulation.
+
+    Instead of dropping raw patches (which produce blobs in most regimes),
+    we run GS_WARMUP_STEPS of real GS first. The NCA starts mid-reaction
+    with actual structure already forming — the same kind of state it trained on.
     """
+    key, sk = random.split(key)
+    A, B = init_gs_grid(sk, H, W)
+
+    # Warm up: random number of steps so every seed looks different
+    warmup = int(np.random.randint(GS_WARMUP_MIN, GS_WARMUP_MAX))
+    for _ in range(warmup):
+        A, B = gs_step(A, B, f, k)
+
+    # Pack into 16-channel NCA grid
     grid = jnp.zeros((H, W, N_CHANNELS))
-
-    # Seed A channel: 1.0 everywhere with tiny noise (GS layer)
-    key, sk = random.split(key)
-    A = jnp.ones((H, W)) - random.uniform(sk, (H, W)) * 0.04
     grid = grid.at[:, :, CH_A].set(A)
-
-    # Seed B channel: random patches (the "spark" that starts the reaction)
-    key, sk = random.split(key)
-    n_patches = int(random.randint(sk, (), 8, 24))
-    B = jnp.zeros((H, W))
-    for _ in range(n_patches):
-        key, sk1, sk2, sk3 = random.split(key, 4)
-        y = int(random.randint(sk1, (), 0, H - 12))
-        x = int(random.randint(sk2, (), 0, W- 12))
-        sz = int(random.randint(sk3, (), 4, 12))
-        B = B.at[y:y+sz, x:x+sz].set(0.25 + np.random.uniform(0, 0.1))
     grid = grid.at[:, :, CH_B].set(B)
-
-    # Write control channels - same value broadcast to every cell
     grid = grid.at[:, :, CH_F].set(f)
     grid = grid.at[:, :, CH_K].set(k)
 
@@ -81,39 +151,45 @@ def init_nca_grid(key, H, W, f, k):
 # ── Rendering ─────────────────────────────────────────────────────────────────
 def render(surface, grid, palette):
     """
-    Map the B channel (channe 1) to color using the current palette.
+    Render both A and B channels.
 
-    B is the "predator" chemical - the one that forms the visible patterns.
-    Values run 0.0 to 1.0. We map that range through 4 palette colors
-    using linear interpolation - same as the GS screensaver does.
+    B (predator) drives the foreground — mapped through the palette as before.
+    A (food) drives the background — it depletes where B is active, creating
+    texture and depth in areas that used to be flat color.
 
-    palette: list of 4 (R, G, B) tuples
+    We blend them: the final color is B's palette color modulated by A's value.
+    Where A is high (undepleted food) the background glows slightly.
+    Where A is low (consumed by B) it goes dark, adding depth behind the patterns.
     """
-    B = np.array(grid[:, :, CH_B]) # (H, W) values in [0, 1]
+    B = np.array(grid[:, :, CH_B])  # (H, W) foreground patterns
+    A = np.array(grid[:, :, CH_A])  # (H, W) background texture
 
-    # Map B values to palette colors via lerp across 4 color stops
-    # t=0.0 -> color[0], t=0.33 -> color[1], t=0.67 -> color[2], t=1.0 -> color[3]
-    p = np.array(palette, dtype=np.float32) / 255.0 # (4, 3) normalized
-    t = np.clip(B * 3.0, 0.0, 3.0) # scale to [0,3] for 4-stop lerp
-    idx = np.floor(t).astype(int).clip(0, 2) # which segment [0,1,2]
-    frac = (t - idx)[..., None] # fractional position in segment
+    p    = np.array(palette, dtype=np.float32) / 255.0
+    t    = np.clip(B * 3.0, 0.0, 3.0)
+    idx  = np.floor(t).astype(int).clip(0, 2)
+    frac = (t - idx)[..., None]
+    c0   = p[idx]
+    c1   = p[idx + 1]
+    rgb  = (c0 + frac * (c1 - c0))
 
-    # Gather the two palette colors for each pixel's segment
-    c0 = p[idx]       # (H, W, 3) — color at start of segment
-    c1 = p[idx + 1]   # (H, W, 3) — color at end of segment
+    # Modulate by A channel — depleted food darkens the background slightly,
+    # undepleted food adds a faint glow. Keeps it subtle so B still dominates.
+    A_mod = (0.6 + 0.4 * A)[..., None]  # range 0.6–1.0, never fully dark
+    rgb   = rgb * A_mod
 
-    # Linear interpolate and convert to uint8
-    rgb = (c0 + frac * (c1 - c0))
-    rgb = (rgb * 255).clip(0, 255).astype(np.uint8)   # (H, W, 3)
+    rgb = (rgb * 255).clip(0, 255).astype(np.uint8)
 
-    # Blit to pygame surface — scale up to display resolution
-    img = pygame.surfarray.make_surface(rgb.transpose(1, 0, 2))
-    scaled = pygame.transform.scale(img, (DISPLAY_W, DISPLAY_H))
-    surface.blit(scaled, (0, 0))
+    img    = pygame.surfarray.make_surface(rgb.transpose(1, 0, 2))
+    if DUAL_SCREEN:
+        scaled = pygame.transform.scale(img, (SCREEN_W, SCREEN_H))
+        surface.blit(scaled, (0, 0))
+        surface.blit(scaled, (SCREEN_W, 0))
+    else:
+        scaled = pygame.transform.scale(img, (DISPLAY_W, DISPLAY_H))
+        surface.blit(scaled, (0, 0))
 
-    # ── Main ──────────────────────────────────────────────────────────────────────
+# ── Main ──────────────────────────────────────────────────────────────────────
 def run():
-    # ── Load checkpoint ───────────────────────────────────────────────────
     if not os.path.exists(CHECKPOINT):
         print(f"Checkpoint not found: {CHECKPOINT}")
         print("Run nca/train.py first.")
@@ -122,21 +198,16 @@ def run():
     print(f"Loading checkpoint: {CHECKPOINT}")
     with open(CHECKPOINT, 'rb') as f:
         params = pickle.load(f)
-    params = jax.device_put(params)   # move to GPU
+    params = jax.device_put(params)
     print("Loaded.")
 
-    # ── Build model ───────────────────────────────────────────────────────
     update_net        = UpdateNet()
     perception_kernel = make_perception_kernel()
     step_fn           = make_step_fn(update_net, perception_kernel)
-    # step_fn(grid, params, key) → (new_grid, new_key)
-    # JIT-compiled, runs on GPU, reused every frame
 
     # ── Starting regime ───────────────────────────────────────────────────
-    # Pick a starting GS regime for the control channels.
-    # The NCA learned what to do with these values — let's see if it remembers.
     regime_names = list(GS_REGIMES.keys())
-    regime_idx   = 0
+    regime_idx   = np.random.randint(0, len(regime_names))
     f, k         = GS_REGIMES[regime_names[regime_idx]]
 
     # ── Starting palette ──────────────────────────────────────────────────
@@ -144,25 +215,64 @@ def run():
     palette_idx   = 0
     palette       = PALETTES[palette_names[palette_idx]]
 
-    # ── Init grid and JAX key ─────────────────────────────────────────────
-    key = random.PRNGKey(42)
+    # ── Init grid ─────────────────────────────────────────────────────────
+    key = random.PRNGKey(int(np.random.randint(0, 2**31)))
+    print(f"Warming up GS seed ({GS_WARMUP_MIN}–{GS_WARMUP_MAX} random steps)...")
     grid, key = init_nca_grid(key, GRID_H, GRID_W, f, k)
+    print("Done. Launching.\n")
 
     # ── Pygame setup ──────────────────────────────────────────────────────
     pygame.init()
     pygame.font.init()
+    if DUAL_SCREEN:
+        os.environ.setdefault('SDL_VIDEO_WINDOW_POS', '0,0')
     screen = pygame.display.set_mode((DISPLAY_W, DISPLAY_H), pygame.NOFRAME)
     pygame.display.set_caption("Somnivex — NCA Free Run")
-    clock  = pygame.font.SysFont("monospace", 16)
     font   = pygame.font.SysFont("monospace", 16)
     ticker = pygame.time.Clock()
 
-    print(f"\nRunning NCA free — no Gray-Scott.")
-    print(f"Starting regime: {regime_names[regime_idx]}  f={f}  k={k}")
-    print(f"Controls: R=reset  F=next regime  K=same regime new seed  P=palette  Q=quit\n")
+    print(f"Starting regime: {regime_names[regime_idx]}  f={f:.4f}  k={k:.4f}")
+    print(f"Controls: R=reset  F=next regime  P=palette  Q=quit\n")
 
-    step_count = 0
-    running    = True
+    step_count      = 0
+    running         = True
+    auto_nudges     = 0
+    steps_per_frame = STEPS_PER_FRAME
+
+    # Perturbation sequence state
+    next_perturb    = np.random.randint(PERTURB_INTERVAL_MIN, PERTURB_INTERVAL_MAX)
+    pokes_remaining = 0
+    next_poke       = 0
+    extreme_mode    = False
+
+    # Autonomous extreme burst schedule
+    next_extreme    = np.random.randint(EXTREME_INTERVAL_MIN, EXTREME_INTERVAL_MAX)
+
+    # Autonomous reseed schedule
+    next_reseed     = np.random.randint(RESEED_INTERVAL_MIN, RESEED_INTERVAL_MAX)
+
+    # Palette crossfade state
+    palette_current = np.array(palette, dtype=np.float32)
+    palette_target  = palette_current.copy()
+    palette_blend   = 0   # counts up to PALETTE_BLEND_STEPS, then resets
+    next_palette_change = np.random.randint(PALETTE_CHANGE_MIN, PALETTE_CHANGE_MAX)
+
+    # Spatial f/k field state — 4 independent phases drift at slightly different
+    # speeds so the pattern never becomes periodic
+    phase_fx = np.random.uniform(0, 2 * np.pi)
+    phase_fy = np.random.uniform(0, 2 * np.pi)
+    phase_kx = np.random.uniform(0, 2 * np.pi)
+    phase_ky = np.random.uniform(0, 2 * np.pi)
+    # Random phase velocity per axis — all drifting, but not in lockstep
+    vel_fx = FK_PHASE_DRIFT * np.random.uniform(0.7, 1.3)
+    vel_fy = FK_PHASE_DRIFT * np.random.uniform(0.7, 1.3)
+    vel_kx = FK_PHASE_DRIFT * np.random.uniform(0.7, 1.3)
+    vel_ky = FK_PHASE_DRIFT * np.random.uniform(0.7, 1.3)
+
+    f_field, k_field = make_fk_field(GRID_H, GRID_W, f, k, phase_fx, phase_fy, phase_kx, phase_ky)
+    jf_field = jnp.array(f_field)
+    jk_field = jnp.array(k_field)
+    print(f"Spatial f/k active  f_center={f:.4f}±{FK_SPATIAL_AMP_F}  k_center={k:.4f}±{FK_SPATIAL_AMP_K}")
 
     while running:
 
@@ -177,49 +287,187 @@ def run():
                     running = False
 
                 if event.key == pygame.K_r:
-                    # Full reset — new random seed, same regime
                     key, sk = random.split(key)
+                    print(f"Resetting (GS warmup)...")
                     grid, key = init_nca_grid(sk, GRID_H, GRID_W, f, k)
-                    step_count = 0
-                    print(f"Reset. Regime: {regime_names[regime_idx]}")
+                    f_field, k_field = make_fk_field(GRID_H, GRID_W, f, k, phase_fx, phase_fy, phase_kx, phase_ky)
+                    jf_field = jnp.array(f_field)
+                    jk_field = jnp.array(k_field)
+                    step_count  = 0
+                    auto_nudges = 0
+                    print(f"Reset done.")
 
                 if event.key == pygame.K_f:
-                    # Cycle to next GS regime — changes f and k control channels
-                    # This is the key test: does the NCA respond to control channel changes?
-                    regime_idx = (regime_idx + 1) % len(regime_names)
-                    f, k = GS_REGIMES[regime_names[regime_idx]]
-                    # Write new f/k into every cell's control channels mid-run
-                    grid = grid.at[:, :, CH_F].set(f)
-                    grid = grid.at[:, :, CH_K].set(k)
-                    print(f"Regime: {regime_names[regime_idx]}  f={f:.4f}  k={k:.4f}")
-
-                if event.key == pygame.K_k:
-                    # Keep regime, reset grid with new seed
-                    key, sk = random.split(key)
-                    grid, key = init_nca_grid(sk, GRID_H, GRID_W, f, k)
-                    step_count = 0
-                    print(f"New seed. Regime: {regime_names[regime_idx]}")
+                    f = float(np.random.uniform(F_MIN, F_MAX))
+                    k = float(np.random.uniform(K_MIN, K_MAX))
+                    f_field, k_field = make_fk_field(GRID_H, GRID_W, f, k, phase_fx, phase_fy, phase_kx, phase_ky)
+                    jf_field = jnp.array(f_field)
+                    jk_field = jnp.array(k_field)
+                    print(f"Manual poke → f_center={f:.4f}  k_center={k:.4f}")
 
                 if event.key == pygame.K_p:
-                    # Cycle to next color palette
-                    palette_idx = (palette_idx + 1) % len(palette_names)
-                    palette = PALETTES[palette_names[palette_idx]]
+                    palette_idx     = (palette_idx + 1) % len(palette_names)
+                    palette_target  = np.array(PALETTES[palette_names[palette_idx]], dtype=np.float32)
+                    palette_blend   = 0
                     print(f"Palette: {palette_names[palette_idx]}")
 
-        # ── NCA step ──────────────────────────────────────────────────────
-        # Run one NCA step. The NCA reads f/k from channels 14/15 of the grid
-        # and uses what it learned during training to update channels 0 and 1.
-        grid, key = step_fn(grid, params, key)
-        step_count += 1
+                if event.key == pygame.K_RIGHTBRACKET:
+                    steps_per_frame = min(steps_per_frame + 1, 20)
+                    print(f"Speed: {steps_per_frame} steps/frame")
+
+                if event.key == pygame.K_LEFTBRACKET:
+                    steps_per_frame = max(steps_per_frame - 1, 1)
+                    print(f"Speed: {steps_per_frame} steps/frame")
+
+                if event.key == pygame.K_x:
+                    # Extreme burst — 4 rapid pokes from the wild regime list
+                    # including values beyond the training range
+                    pokes_remaining = 4
+                    next_poke       = step_count
+                    # Override normal perturbation to use extreme values
+                    extreme_mode    = True
+                    print(f"EXTREME BURST fired")
+
+        # ── NCA steps ─────────────────────────────────────────────────────
+        for _ in range(steps_per_frame):
+            grid, key = step_fn(grid, params, key)
+            # Re-inject spatial f/k after every NCA step so cells always read
+            # their local value, not whatever the NCA accidentally wrote to those channels
+            grid = grid.at[:, :, CH_F].set(jf_field)
+            grid = grid.at[:, :, CH_K].set(jk_field)
+            step_count += 1
+
+        # ── Spatial field phase drift ─────────────────────────────────────
+        # Advance all four phases by their individual velocities each frame.
+        # The field slowly scrolls across the grid — regions that were in
+        # swirl territory drift toward coral territory, and vice versa.
+        phase_fx += vel_fx * steps_per_frame
+        phase_fy += vel_fy * steps_per_frame
+        phase_kx += vel_kx * steps_per_frame
+        phase_ky += vel_ky * steps_per_frame
+        f_field, k_field = make_fk_field(GRID_H, GRID_W, f, k, phase_fx, phase_fy, phase_kx, phase_ky)
+        jf_field = jnp.array(f_field)
+        jk_field = jnp.array(k_field)
+
+        # ── Autonomous f/k drift ──────────────────────────────────────────
+        # Every DRIFT_EVERY steps, nudge the center f/k values.
+        # This shifts the whole spatial field — every region moves together
+        # but they all stay offset from each other.
+        if step_count % DRIFT_EVERY == 0:
+            df = np.random.uniform(-DRIFT_AMOUNT, DRIFT_AMOUNT)
+            dk = np.random.uniform(-DRIFT_AMOUNT, DRIFT_AMOUNT)
+            f  = float(np.clip(f + df, F_MIN, F_MAX))
+            k  = float(np.clip(k + dk, K_MIN, K_MAX))
+            f_field, k_field = make_fk_field(GRID_H, GRID_W, f, k, phase_fx, phase_fy, phase_kx, phase_ky)
+            jf_field = jnp.array(f_field)
+            jk_field = jnp.array(k_field)
+
+        # ── Autonomous extreme burst ──────────────────────────────────────
+        if step_count >= next_extreme and pokes_remaining == 0:
+            pokes_remaining = 4
+            next_poke       = step_count
+            extreme_mode    = True
+            next_extreme    = step_count + np.random.randint(EXTREME_INTERVAL_MIN, EXTREME_INTERVAL_MAX)
+            print(f"Auto extreme burst (next in {next_extreme - step_count} steps)")
+
+        # ── Autonomous reseed ─────────────────────────────────────────────
+        # Drop a fresh GS-warmed seed mid-run. The NCA gets a completely new
+        # starting structure to grow from — breaks long attractor loops.
+        # Also randomize the field phases so the spatial landscape is fresh.
+        if step_count >= next_reseed:
+            f           = float(np.random.uniform(F_MIN, F_MAX))
+            k           = float(np.random.uniform(K_MIN, K_MAX))
+            key, sk     = random.split(key)
+            grid, key   = init_nca_grid(sk, GRID_H, GRID_W, f, k)
+            # Fresh phase offsets — spatial landscape starts from a new configuration
+            phase_fx = np.random.uniform(0, 2 * np.pi)
+            phase_fy = np.random.uniform(0, 2 * np.pi)
+            phase_kx = np.random.uniform(0, 2 * np.pi)
+            phase_ky = np.random.uniform(0, 2 * np.pi)
+            vel_fx = FK_PHASE_DRIFT * np.random.uniform(0.7, 1.3)
+            vel_fy = FK_PHASE_DRIFT * np.random.uniform(0.7, 1.3)
+            vel_kx = FK_PHASE_DRIFT * np.random.uniform(0.7, 1.3)
+            vel_ky = FK_PHASE_DRIFT * np.random.uniform(0.7, 1.3)
+            f_field, k_field = make_fk_field(GRID_H, GRID_W, f, k, phase_fx, phase_fy, phase_kx, phase_ky)
+            jf_field = jnp.array(f_field)
+            jk_field = jnp.array(k_field)
+            next_reseed = step_count + np.random.randint(RESEED_INTERVAL_MIN, RESEED_INTERVAL_MAX)
+            print(f"Auto reseed → f={f:.4f} k={k:.4f}  (next in {next_reseed - step_count} steps)")
+
+        # ── Perturbation sequences ────────────────────────────────────────
+        # Periodically disturb the pattern with a burst of regime changes.
+        # Each poke writes new f/k mid-reaction — the NCA treats it as damage
+        # and reorganizes. Space them out to avoid solid-screen collapse.
+
+        # Start a new sequence
+        if pokes_remaining == 0 and step_count >= next_perturb:
+            pokes_remaining = np.random.randint(PERTURB_POKES_MIN, PERTURB_POKES_MAX + 1)
+            next_poke       = step_count
+            print(f"Perturbation: {pokes_remaining} pokes incoming...")
+
+        # Fire the next poke in the active sequence
+        if pokes_remaining > 0 and step_count >= next_poke:
+            if extreme_mode:
+                # Wide random range — well beyond training data
+                f = float(np.random.uniform(0.004, 0.080))
+                k = float(np.random.uniform(0.038, 0.075))
+            else:
+                # Normal range — within trained territory
+                f = float(np.random.uniform(F_MIN, F_MAX))
+                k = float(np.random.uniform(K_MIN, K_MAX))
+            f_field, k_field = make_fk_field(GRID_H, GRID_W, f, k, phase_fx, phase_fy, phase_kx, phase_ky)
+            jf_field = jnp.array(f_field)
+            jk_field = jnp.array(k_field)
+            pokes_remaining -= 1
+            next_poke        = step_count + np.random.randint(PERTURB_SPACING_MIN, PERTURB_SPACING_MAX)
+            label            = "EXTREME" if extreme_mode else "poke"
+            print(f"  {label} → f={f:.4f} k={k:.4f}  ({pokes_remaining} remaining)")
+            if pokes_remaining == 0:
+                extreme_mode = False
+                next_perturb = step_count + np.random.randint(PERTURB_INTERVAL_MIN, PERTURB_INTERVAL_MAX)
+                print(f"  next sequence in {next_perturb - step_count} steps")
+
+        # ── Saturation detection ──────────────────────────────────────────
+        # If B channel goes nearly uniform (std too low), the NCA is stuck.
+        # Jump to the next regime to escape.
+        if step_count % SATURATION_CHECK == 0:
+            b_std = float(jnp.std(grid[:, :, CH_B]))
+            if b_std < SATURATION_STD:
+                f           = float(np.random.uniform(F_MIN, F_MAX))
+                k           = float(np.random.uniform(K_MIN, K_MAX))
+                key, sk     = random.split(key)
+                grid, key   = init_nca_grid(sk, GRID_H, GRID_W, f, k)
+                f_field, k_field = make_fk_field(GRID_H, GRID_W, f, k, phase_fx, phase_fy, phase_kx, phase_ky)
+                jf_field = jnp.array(f_field)
+                jk_field = jnp.array(k_field)
+                auto_nudges += 1
+                print(f"Saturated (std={b_std:.4f}) → full reseed #{auto_nudges}  f={f:.4f} k={k:.4f}")
+
+        # ── Autonomous palette crossfade ──────────────────────────────────
+        if step_count >= next_palette_change and palette_blend == 0:
+            new_idx             = np.random.randint(0, len(palette_names))
+            palette_idx         = new_idx
+            palette_target      = np.array(PALETTES[palette_names[new_idx]], dtype=np.float32)
+            palette_blend       = 1
+            next_palette_change = step_count + np.random.randint(PALETTE_CHANGE_MIN, PALETTE_CHANGE_MAX)
+            print(f"Palette → {palette_names[new_idx]}")
+
+        if palette_blend > 0:
+            t               = palette_blend / PALETTE_BLEND_STEPS
+            blended_palette = (palette_current * (1 - t) + palette_target * t).clip(0, 255)
+            palette_blend  += 1
+            if palette_blend >= PALETTE_BLEND_STEPS:
+                palette_current = palette_target.copy()
+                palette_blend   = 0
+        else:
+            blended_palette = palette_current
 
         # ── Render ────────────────────────────────────────────────────────
-        render(screen, grid, palette)
+        render(screen, grid, blended_palette.astype(np.uint8).tolist())
 
-        # HUD — small text overlay so you can see what's running
-        regime_str  = regime_names[regime_idx]
         palette_str = palette_names[palette_idx]
         hud = font.render(
-            f"step {step_count}  |  {regime_str}  f={f:.4f} k={k:.4f}  |  {palette_str}  |  R=reset F=regime P=palette Q=quit",
+            f"step {step_count}  |  f={f:.4f}±{FK_SPATIAL_AMP_F} k={k:.4f}±{FK_SPATIAL_AMP_K}  |  {palette_str}  |  speed={steps_per_frame}  |  [/] speed  R=reset F=poke X=extreme P=palette Q=quit",
             True, (80, 80, 80)
         )
         screen.blit(hud, (10, 10))

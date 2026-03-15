@@ -4,4 +4,4 @@
 
 cd "$(dirname "$0")"
 source /home/kk/ai-env/bin/activate
-python main.py --screensaver
+python nca/run_free.py

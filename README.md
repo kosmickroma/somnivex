@@ -114,6 +114,12 @@ A small neural network (17,000 parameters) runs the same update rule on every ce
 
 The result: one model that internalized all 15 GS regimes simultaneously. Changing f and k mid-run changes its behavior without restarting anything — the NCA reads the control channels every step and responds. But it also has its own interpretation of those physics, expressed through its hidden channels. That's where the non-GS behavior comes from.
 
+### Spatial f/k parameter fields
+
+Instead of broadcasting a single f and k value to every cell, the system generates a smooth 2D noise field — each cell receives its own f and k drawn from a slowly drifting sine-wave landscape. Different regions of the grid live in different parameter regimes simultaneously. One corner might be in spiral territory while another is in near-starvation territory where only ghost traces survive.
+
+The field drifts on four independent phase clocks, so what was worm territory slowly becomes coral territory becomes blob territory without any hard transition. The whole grid can never lock into one attractor because no two regions are ever in exactly the same parameter state. This is implemented entirely at runtime — no retraining required. The landscape is pure geometry layered on top of the trained physics.
+
 ---
 
 ## Hardware
@@ -142,8 +148,10 @@ GPU simulation, 15 regimes, 117 palettes, 5 render modes, 6 effects, dual screen
 ### ✅ Phase 2 — NCA Physics Training
 Neural Cellular Automaton trained on GS physics via pool-based multi-step rollout. Runs freely on its own output indefinitely. One model covers all 15 regimes via control channels. Produces patterns that blend and morph between GS behaviors in novel ways.
 
-### Phase 3 — Autonomous Steering
-The NCA steers itself. Saturation detection notices when patterns collapse to uniform and nudges the control channels to escape. Slow autonomous drift walks f and k through the parameter space over time — patterns transform gradually instead of snapping. No human intervention required for indefinite interesting output.
+### ✅ Phase 3 — Autonomous Steering
+Saturation detection, autonomous f/k drift, perturbation sequences, extreme bursts, timed reseeds, and autonomous palette crossfading. The system runs indefinitely without intervention.
+
+**Spatial f/k parameter fields** (Phase 3 extension): Each cell gets its own f/k from a drifting 2D noise field. Different regions behave in different regimes simultaneously — the whole grid can never collapse to one state. No retraining required.
 
 ### Phase 4 — Expanded Physics
 Train the NCA on additional reaction-diffusion systems alongside GS — Turing patterns, Lenia, or others. With multiple physics in the training data, the NCA blends them together in free run, producing morphologies that no single system generates alone.

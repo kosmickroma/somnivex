@@ -36,6 +36,22 @@ spatial injection after every NCA step. ~50 lines of runtime geometry.
 
 ---
 
+## 2026-03-15 — First Confirmed Novel Boundary Morphology
+
+Screenshot `spatial_spiral_geometric_sepia.png` shows angular geometric structures
+(straight lines, sharp corners) coexisting with a large concentric spiral in the
+same frame. The geometric structures do not appear in any single-parameter GS run.
+They emerge at the boundary between two spatial f/k regions — the NCA's own
+interpretation of the transition zone.
+
+This is the first documented case of a morphology produced by this system that
+cannot be reproduced by any fixed-parameter configuration of either GS or the NCA.
+It is a genuinely novel structure produced by spatial parameter interaction.
+
+See `notes/spatial_fk_observations.md` for full visual documentation.
+
+---
+
 ## 2026-03-14 — NCA Free Run Working (Phase 2 Complete)
 
 **What changed:**

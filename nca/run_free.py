@@ -28,6 +28,7 @@ from nca.model import(
 )
 from gs.engine import GS_REGIMES, gs_step, init_gs_grid
 from nca.params import PALETTES
+from display.windows import compute_heat, apply_palette_heat, apply_effect
 
 # ── Config ────────────────────────────────────────────────────────────────────
 CHECKPOINT = os.path.join(
@@ -50,8 +51,8 @@ DRIFT_EVERY        = 400   # steps between gentle f/k nudges
 DRIFT_AMOUNT       = 0.004 # size of each nudge
 F_MIN, F_MAX       = 0.01, 0.08
 K_MIN, K_MAX       = 0.04, 0.075
-SATURATION_CHECK   = 150   # steps between saturation checks
-SATURATION_STD     = 0.02  # B std below this = stuck, escape
+SATURATION_CHECK   = 60    # steps between saturation checks (~2s at 30fps)
+SATURATION_STD     = 0.010 # B std below this = truly solid screen, reseed
 
 # Autonomous palette crossfading
 PALETTE_CHANGE_MIN = 1800  # min steps between palette transitions
@@ -85,6 +86,51 @@ EXTREME_INTERVAL_MAX = 9000  # max steps between autonomous extreme bursts (~5mi
 
 RESEED_INTERVAL_MIN  = 8000  # min steps between autonomous reseeds (~4min)
 RESEED_INTERVAL_MAX  = 18000 # max steps between autonomous reseeds (~10min)
+
+# Render modes — different ways to read the NCA state
+# "combined" is the NCA-specific A+B blend. The rest come from the GS pipeline.
+NCA_RENDER_MODES = ["combined", "B", "edges", "reaction", "differential", "A_inv"]
+NCA_EFFECTS      = ["none", "bloom", "vignette", "chromatic", "grain", "scanlines"]
+
+RENDER_MODE_CHANGE_MIN = 3000  # steps between auto render mode changes
+RENDER_MODE_CHANGE_MAX = 8000
+EFFECT_CHANGE_MIN      = 4000  # steps between auto effect changes
+EFFECT_CHANGE_MAX      = 10000
+
+# Palette groups — when crossfading, 70% chance stay in same family for continuity
+PALETTE_GROUPS = {
+    'dark':   ['void', 'event_horizon', 'kraken_ink', 'shadow_realm', 'black_water',
+               'obsidian', 'oil_slick_dark', 'abyssal', 'inferno', 'deep_crimson'],
+    'warm':   ['sunset_fire', 'amber_ember', 'molten_gold', 'solar_flare', 'magma_ocean',
+               'blood_moon', 'coal_ember', 'dwarven_forge', 'phoenix', 'thermal_vent',
+               'molten_steel', 'rust_iron', 'rust_decay', 'jasper', 'white_phosphor',
+               'candlelight', 'golden_hour', 'solar_wind', 'dragon_fire'],
+    'cool':   ['deep_ocean', 'ice_cave', 'ghost', 'titanium', 'storm_grey', 'arctic_melt',
+               'blue_hour', 'blue_flame', 'welding_arc', 'quasar_jet', 'pulsar',
+               'lightning_storm', 'fog_bank', 'factory_smoke', 'shale', 'angelic',
+               'terminal_cyan', 'bone_dust'],
+    'green':  ['forest_floor', 'acid', 'deep_jungle', 'neon_moss', 'copper_verdigris',
+               'malachite', 'circuit_trace', 'terminal_green', 'phosphor_green',
+               'fungal_glow', 'radiation', 'northern_lights', 'cell_wall', 'aurora',
+               'toxic', 'deep_bio'],
+    'cosmic': ['cosmic', 'void_bloom', 'andromeda', 'stardust', 'amethyst', 'acid_wash',
+               'uv_rave', 'plasma_arc', 'vhs_bleed', 'nebula_red', 'oil_slick',
+               'blood_vessel', 'holographic', 'sunset_lavender'],
+    'vivid':  ['candy_chrome', 'neon_city', 'sakura', 'pollen_burst', 'terminal_amber',
+               'pyrite', 'monochrome', 'sandstone', 'spore_cloud', 'mycelium',
+               'dust_storm', 'bioluminescent_bay', 'tide_pool'],
+}
+# Reverse map: palette name → group
+_PAL_TO_GROUP = {p: g for g, pals in PALETTE_GROUPS.items() for p in pals}
+
+def pick_next_palette(current_name, all_names):
+    """70% chance: pick from same color family. 30%: pick anything."""
+    group = _PAL_TO_GROUP.get(current_name)
+    if group and np.random.random() < 0.70:
+        candidates = [p for p in PALETTE_GROUPS[group] if p in PALETTES and p != current_name]
+        if candidates:
+            return np.random.choice(candidates)
+    return np.random.choice(all_names)
 
 # Spatial f/k variation — each cell gets its own f/k from a drifting noise field.
 # Different regions behave in different parameter regimes simultaneously.
@@ -149,37 +195,39 @@ def init_nca_grid(key, H, W, f, k):
     return grid, key
 
 # ── Rendering ─────────────────────────────────────────────────────────────────
-def render(surface, grid, palette):
+def render(surface, grid, palette, render_mode="combined", effect="none"):
     """
-    Render both A and B channels.
+    Render the NCA grid through a chosen mode and effect.
 
-    B (predator) drives the foreground — mapped through the palette as before.
-    A (food) drives the background — it depletes where B is active, creating
-    texture and depth in areas that used to be flat color.
+    Modes:
+      combined    — A+B blend (NCA-native: B drives foreground, A modulates depth)
+      B           — raw B channel
+      edges       — structure boundaries glow
+      reaction    — only active chemistry zones light up
+      differential— maximum contrast at the A/B interface
+      A_inv       — inverted A channel
 
-    We blend them: the final color is B's palette color modulated by A's value.
-    Where A is high (undepleted food) the background glows slightly.
-    Where A is low (consumed by B) it goes dark, adding depth behind the patterns.
+    Effects: none, bloom, vignette, chromatic, grain, scanlines
     """
-    B = np.array(grid[:, :, CH_B])  # (H, W) foreground patterns
-    A = np.array(grid[:, :, CH_A])  # (H, W) background texture
+    A_np = np.array(grid[:, :, CH_A])
+    B_np = np.array(grid[:, :, CH_B])
+    pal  = np.array(palette, dtype=np.float32)
 
-    p    = np.array(palette, dtype=np.float32) / 255.0
-    t    = np.clip(B * 3.0, 0.0, 3.0)
-    idx  = np.floor(t).astype(int).clip(0, 2)
-    frac = (t - idx)[..., None]
-    c0   = p[idx]
-    c1   = p[idx + 1]
-    rgb  = (c0 + frac * (c1 - c0))
+    if render_mode == "combined":
+        p    = pal / 255.0
+        t    = np.clip(B_np * 3.0, 0.0, 3.0)
+        idx  = np.floor(t).astype(int).clip(0, 2)
+        frac = (t - idx)[..., None]
+        rgb  = p[idx] + frac * (p[idx + 1] - p[idx])
+        rgb  = rgb * (0.6 + 0.4 * A_np)[..., None]
+        rgb  = (rgb * 255).clip(0, 255).astype(np.uint8)
+    else:
+        heat = compute_heat(A_np, B_np, render_mode)
+        rgb  = apply_palette_heat(heat, pal)
 
-    # Modulate by A channel — depleted food darkens the background slightly,
-    # undepleted food adds a faint glow. Keeps it subtle so B still dominates.
-    A_mod = (0.6 + 0.4 * A)[..., None]  # range 0.6–1.0, never fully dark
-    rgb   = rgb * A_mod
+    rgb = apply_effect(rgb, effect)
 
-    rgb = (rgb * 255).clip(0, 255).astype(np.uint8)
-
-    img    = pygame.surfarray.make_surface(rgb.transpose(1, 0, 2))
+    img = pygame.surfarray.make_surface(rgb.transpose(1, 0, 2))
     if DUAL_SCREEN:
         scaled = pygame.transform.scale(img, (SCREEN_W, SCREEN_H))
         surface.blit(scaled, (0, 0))
@@ -244,6 +292,8 @@ def run():
     pokes_remaining = 0
     next_poke       = 0
     extreme_mode    = False
+    pre_burst_f     = f   # f/k saved before an extreme burst so we can restore after
+    pre_burst_k     = k
 
     # Autonomous extreme burst schedule
     next_extreme    = np.random.randint(EXTREME_INTERVAL_MIN, EXTREME_INTERVAL_MAX)
@@ -256,6 +306,14 @@ def run():
     palette_target  = palette_current.copy()
     palette_blend   = 0   # counts up to PALETTE_BLEND_STEPS, then resets
     next_palette_change = np.random.randint(PALETTE_CHANGE_MIN, PALETTE_CHANGE_MAX)
+
+    # Render mode + effect state
+    render_mode_idx  = 0   # start on "combined"
+    effect_idx       = 0   # start on "none"
+    render_mode      = NCA_RENDER_MODES[render_mode_idx]
+    effect           = NCA_EFFECTS[effect_idx]
+    next_mode_change = np.random.randint(RENDER_MODE_CHANGE_MIN, RENDER_MODE_CHANGE_MAX)
+    next_effect_change = np.random.randint(EFFECT_CHANGE_MIN, EFFECT_CHANGE_MAX)
 
     # Spatial f/k field state — 4 independent phases drift at slightly different
     # speeds so the pattern never becomes periodic
@@ -306,10 +364,11 @@ def run():
                     print(f"Manual poke → f_center={f:.4f}  k_center={k:.4f}")
 
                 if event.key == pygame.K_p:
-                    palette_idx     = (palette_idx + 1) % len(palette_names)
-                    palette_target  = np.array(PALETTES[palette_names[palette_idx]], dtype=np.float32)
-                    palette_blend   = 0
-                    print(f"Palette: {palette_names[palette_idx]}")
+                    new_name       = pick_next_palette(palette_names[palette_idx], palette_names)
+                    palette_idx    = palette_names.index(new_name)
+                    palette_target = np.array(PALETTES[new_name], dtype=np.float32)
+                    palette_blend  = 0
+                    print(f"Palette: {new_name}")
 
                 if event.key == pygame.K_RIGHTBRACKET:
                     steps_per_frame = min(steps_per_frame + 1, 20)
@@ -319,14 +378,23 @@ def run():
                     steps_per_frame = max(steps_per_frame - 1, 1)
                     print(f"Speed: {steps_per_frame} steps/frame")
 
+                if event.key == pygame.K_m:
+                    render_mode_idx = (render_mode_idx + 1) % len(NCA_RENDER_MODES)
+                    render_mode     = NCA_RENDER_MODES[render_mode_idx]
+                    print(f"Render mode: {render_mode}")
+
+                if event.key == pygame.K_e:
+                    effect_idx = (effect_idx + 1) % len(NCA_EFFECTS)
+                    effect     = NCA_EFFECTS[effect_idx]
+                    print(f"Effect: {effect}")
+
                 if event.key == pygame.K_x:
-                    # Extreme burst — 4 rapid pokes from the wild regime list
-                    # including values beyond the training range
+                    pre_burst_f     = f
+                    pre_burst_k     = k
                     pokes_remaining = 4
                     next_poke       = step_count
-                    # Override normal perturbation to use extreme values
                     extreme_mode    = True
-                    print(f"EXTREME BURST fired")
+                    print(f"EXTREME BURST fired (will restore f={f:.4f} k={k:.4f} after)")
 
         # ── NCA steps ─────────────────────────────────────────────────────
         for _ in range(steps_per_frame):
@@ -364,35 +432,18 @@ def run():
 
         # ── Autonomous extreme burst ──────────────────────────────────────
         if step_count >= next_extreme and pokes_remaining == 0:
+            pre_burst_f     = f
+            pre_burst_k     = k
             pokes_remaining = 4
             next_poke       = step_count
             extreme_mode    = True
             next_extreme    = step_count + np.random.randint(EXTREME_INTERVAL_MIN, EXTREME_INTERVAL_MAX)
-            print(f"Auto extreme burst (next in {next_extreme - step_count} steps)")
+            print(f"Auto extreme burst (will restore after, next in {next_extreme - step_count} steps)")
 
-        # ── Autonomous reseed ─────────────────────────────────────────────
-        # Drop a fresh GS-warmed seed mid-run. The NCA gets a completely new
-        # starting structure to grow from — breaks long attractor loops.
-        # Also randomize the field phases so the spatial landscape is fresh.
-        if step_count >= next_reseed:
-            f           = float(np.random.uniform(F_MIN, F_MAX))
-            k           = float(np.random.uniform(K_MIN, K_MAX))
-            key, sk     = random.split(key)
-            grid, key   = init_nca_grid(sk, GRID_H, GRID_W, f, k)
-            # Fresh phase offsets — spatial landscape starts from a new configuration
-            phase_fx = np.random.uniform(0, 2 * np.pi)
-            phase_fy = np.random.uniform(0, 2 * np.pi)
-            phase_kx = np.random.uniform(0, 2 * np.pi)
-            phase_ky = np.random.uniform(0, 2 * np.pi)
-            vel_fx = FK_PHASE_DRIFT * np.random.uniform(0.7, 1.3)
-            vel_fy = FK_PHASE_DRIFT * np.random.uniform(0.7, 1.3)
-            vel_kx = FK_PHASE_DRIFT * np.random.uniform(0.7, 1.3)
-            vel_ky = FK_PHASE_DRIFT * np.random.uniform(0.7, 1.3)
-            f_field, k_field = make_fk_field(GRID_H, GRID_W, f, k, phase_fx, phase_fy, phase_kx, phase_ky)
-            jf_field = jnp.array(f_field)
-            jk_field = jnp.array(k_field)
-            next_reseed = step_count + np.random.randint(RESEED_INTERVAL_MIN, RESEED_INTERVAL_MAX)
-            print(f"Auto reseed → f={f:.4f} k={k:.4f}  (next in {next_reseed - step_count} steps)")
+        # ── Autonomous reseed — DISABLED ──────────────────────────────────
+        # Spatial f/k variation prevents attractor lock-in structurally.
+        # Timed reseeds now interrupt interesting states more than they help.
+        # R key still works for manual reseeds. Re-enable if needed.
 
         # ── Perturbation sequences ────────────────────────────────────────
         # Periodically disturb the pattern with a burst of regime changes.
@@ -408,9 +459,10 @@ def run():
         # Fire the next poke in the active sequence
         if pokes_remaining > 0 and step_count >= next_poke:
             if extreme_mode:
-                # Wide random range — well beyond training data
-                f = float(np.random.uniform(0.004, 0.080))
-                k = float(np.random.uniform(0.038, 0.075))
+                # Adventurous but above F_MIN — going below 0.01 clips the
+                # whole spatial field to the floor and collapses everything
+                f = float(np.random.uniform(0.012, 0.072))
+                k = float(np.random.uniform(0.043, 0.072))
             else:
                 # Normal range — within trained territory
                 f = float(np.random.uniform(F_MIN, F_MAX))
@@ -423,34 +475,59 @@ def run():
             label            = "EXTREME" if extreme_mode else "poke"
             print(f"  {label} → f={f:.4f} k={k:.4f}  ({pokes_remaining} remaining)")
             if pokes_remaining == 0:
+                if extreme_mode:
+                    # Restore the field to where it was before the burst
+                    # so the extreme jolt doesn't permanently strand the system
+                    f = pre_burst_f
+                    k = pre_burst_k
+                    f_field, k_field = make_fk_field(GRID_H, GRID_W, f, k, phase_fx, phase_fy, phase_kx, phase_ky)
+                    jf_field = jnp.array(f_field)
+                    jk_field = jnp.array(k_field)
+                    print(f"  burst done — restored f={f:.4f} k={k:.4f}")
                 extreme_mode = False
                 next_perturb = step_count + np.random.randint(PERTURB_INTERVAL_MIN, PERTURB_INTERVAL_MAX)
                 print(f"  next sequence in {next_perturb - step_count} steps")
 
         # ── Saturation detection ──────────────────────────────────────────
-        # If B channel goes nearly uniform (std too low), the NCA is stuck.
-        # Jump to the next regime to escape.
+        # Only fires when the screen is truly solid — threshold lowered from
+        # 0.02 to 0.005 so interesting dark/ghost-trace states are left alone.
         if step_count % SATURATION_CHECK == 0:
             b_std = float(jnp.std(grid[:, :, CH_B]))
             if b_std < SATURATION_STD:
-                f           = float(np.random.uniform(F_MIN, F_MAX))
-                k           = float(np.random.uniform(K_MIN, K_MAX))
-                key, sk     = random.split(key)
-                grid, key   = init_nca_grid(sk, GRID_H, GRID_W, f, k)
+                # Pick fresh safe f/k — current values may be extreme/clipped
+                # which is what caused the collapse in the first place
+                f         = float(np.random.uniform(0.025, 0.060))
+                k         = float(np.random.uniform(0.050, 0.065))
+                key, sk   = random.split(key)
+                grid, key = init_nca_grid(sk, GRID_H, GRID_W, f, k)
                 f_field, k_field = make_fk_field(GRID_H, GRID_W, f, k, phase_fx, phase_fy, phase_kx, phase_ky)
-                jf_field = jnp.array(f_field)
-                jk_field = jnp.array(k_field)
+                jf_field  = jnp.array(f_field)
+                jk_field  = jnp.array(k_field)
                 auto_nudges += 1
-                print(f"Saturated (std={b_std:.4f}) → full reseed #{auto_nudges}  f={f:.4f} k={k:.4f}")
+                print(f"Solid screen (std={b_std:.4f}) → reseed #{auto_nudges}  f={f:.4f} k={k:.4f}")
+
+        # ── Autonomous render mode rotation ───────────────────────────────
+        if step_count >= next_mode_change:
+            render_mode_idx  = (render_mode_idx + 1) % len(NCA_RENDER_MODES)
+            render_mode      = NCA_RENDER_MODES[render_mode_idx]
+            next_mode_change = step_count + np.random.randint(RENDER_MODE_CHANGE_MIN, RENDER_MODE_CHANGE_MAX)
+            print(f"Auto render mode → {render_mode}")
+
+        # ── Autonomous effect rotation ─────────────────────────────────────
+        if step_count >= next_effect_change:
+            effect_idx         = (effect_idx + 1) % len(NCA_EFFECTS)
+            effect             = NCA_EFFECTS[effect_idx]
+            next_effect_change = step_count + np.random.randint(EFFECT_CHANGE_MIN, EFFECT_CHANGE_MAX)
+            print(f"Auto effect → {effect}")
 
         # ── Autonomous palette crossfade ──────────────────────────────────
         if step_count >= next_palette_change and palette_blend == 0:
-            new_idx             = np.random.randint(0, len(palette_names))
-            palette_idx         = new_idx
-            palette_target      = np.array(PALETTES[palette_names[new_idx]], dtype=np.float32)
+            new_name            = pick_next_palette(palette_names[palette_idx], palette_names)
+            palette_idx         = palette_names.index(new_name)
+            palette_target      = np.array(PALETTES[new_name], dtype=np.float32)
             palette_blend       = 1
             next_palette_change = step_count + np.random.randint(PALETTE_CHANGE_MIN, PALETTE_CHANGE_MAX)
-            print(f"Palette → {palette_names[new_idx]}")
+            print(f"Palette → {new_name}")
 
         if palette_blend > 0:
             t               = palette_blend / PALETTE_BLEND_STEPS
@@ -463,11 +540,11 @@ def run():
             blended_palette = palette_current
 
         # ── Render ────────────────────────────────────────────────────────
-        render(screen, grid, blended_palette.astype(np.uint8).tolist())
+        render(screen, grid, blended_palette.astype(np.uint8).tolist(), render_mode, effect)
 
         palette_str = palette_names[palette_idx]
         hud = font.render(
-            f"step {step_count}  |  f={f:.4f}±{FK_SPATIAL_AMP_F} k={k:.4f}±{FK_SPATIAL_AMP_K}  |  {palette_str}  |  speed={steps_per_frame}  |  [/] speed  R=reset F=poke X=extreme P=palette Q=quit",
+            f"step {step_count}  |  f={f:.4f}±{FK_SPATIAL_AMP_F} k={k:.4f}±{FK_SPATIAL_AMP_K}  |  {palette_str}  |  {render_mode}+{effect}  |  spd={steps_per_frame}  |  M=mode E=effect P=palette F=poke X=extreme R=reset Q=quit",
             True, (80, 80, 80)
         )
         screen.blit(hud, (10, 10))

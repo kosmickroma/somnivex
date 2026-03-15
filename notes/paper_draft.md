@@ -205,29 +205,52 @@ from the NCA's learned local rules interacting across the smooth parameter lands
 ## 5. Observed Results
 
 Visual behaviors observed in Somnivex after implementing spatial parameter fields
-(March 14, 2026):
+(March 14–15, 2026). Video evidence: `media/spatial_fk_morphological_transition_2026-03-14.webm`
 
-**Co-existing regimes in a single frame:**
+### 5.1 Spatial Co-existence of Multiple Regimes
+
+In a single frame, the grid simultaneously expresses:
 - Dense intricate worm networks at fine scale in one region
 - Large organic blob forms (cell/cloud morphology) in another region
 - Thin ghost traces at near-extinction in a third region
 - Structured maze-like branching at region boundaries
+- Novel geometric/angular boundary morphologies not present in any fixed-parameter run
 
-**Temporal behavior:**
-- Regions maintain their character for minutes, then slowly transform
-- Boundaries between regimes are soft and move continuously
-- The whole grid never collapses to one state — there is always some region
-  doing something different from every other region
-- Visual interest is sustained indefinitely without human intervention
+### 5.2 Real-Time Morphological Transition (Key Result)
 
-**Previously unobserved morphologies:**
-- Ghost trace state: barely-visible dark structures on near-black background,
-  right at the edge of collapse. This state is never stable globally (the
-  saturation detector would trigger a reseed) but is stable locally when
-  surrounded by more active regions that maintain the boundary chemistry.
-- Blob-to-worm boundary structures: at the edge between blob-territory and
-  worm-territory cells, the NCA produces novel transition morphologies that
-  do not appear in either pure regime.
+Video analysis of a 9-second sequence (timestamps 00:39–00:48) reveals continuous
+morphological transformation driven by spatial field drift:
+
+| Time | Structure | Interpretation |
+|------|-----------|----------------|
+| 00:39 | Tight comma-hooks, sparse, closed forms | Low-density hook regime |
+| 00:44 | Connected worm/maze network | Network formation as regions shift |
+| 00:45 | Dense network, open clearing appears | Spatial boundary moving through frame |
+| 00:46 | Forms enlarging, amoeba-like dissolve | Transition zone crossing the frame |
+| 00:47 | Mixed blob/worm scales, reorganizing | Multi-regime co-existence mid-transition |
+| 00:48 | Large continental flowing forms | High-f blob regime dominant |
+
+The entire visual character of the system transforms from tight hooks to continental
+blobs in under 10 seconds — continuously, without resets, driven purely by the
+drifting parameter landscape. This temporal evolution is not possible in any
+fixed-parameter configuration.
+
+### 5.3 Previously Unobserved Morphologies
+
+**Ghost trace state:** barely-visible dark structures on near-black background,
+right at the edge of collapse. Locally stable when surrounded by more active
+regions that maintain boundary chemistry — globally unstable, locally sustained.
+This state cannot exist in a uniform-parameter system.
+
+**Boundary morphologies:** at parameter region boundaries, the NCA produces
+angular geometric structures — straight lines, sharp corners — that appear in
+no single fixed-parameter GS or NCA run. These are genuine emergent novelties
+produced by the spatial parameter interaction.
+
+**Three-color depth rendering:** the A channel modulation reveals internal
+structure within patterns — the concave inner edge of a curl reads differently
+from its outer edge, producing apparent depth and material quality not present
+in single-channel rendering.
 
 ---
 

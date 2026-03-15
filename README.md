@@ -10,9 +10,19 @@
 | ![](screenshots/rings_pink.png) | ![](screenshots/chromatic_spots.png) | ![](screenshots/neon_rings.png) |
 | ![](screenshots/gold_channels.png) | ![](screenshots/fingerprint_green.png) | ![](screenshots/rings_dark_pink.png) |
 
-Somnivex is an open-source generative art system with two layers: a Gray-Scott reaction-diffusion simulation running on GPU, and a trained Neural Cellular Automaton that learned GS physics and now runs freely on its own output — producing patterns that blend and morph between regimes in ways no fixed simulation can. Spirals dissolve into worms. Diamonds collapse into swirls. It finds its own path.
+Somnivex is an open-source generative art system built on a trained Neural Cellular Automaton. It learned Gray-Scott reaction-diffusion physics from data and now runs those physics from memory — producing patterns that blend and morph between regimes in ways no fixed simulation can. Spirals dissolve into worms. Diamonds collapse into swirls. It finds its own path.
 
 No prompts. No inputs. Just autonomous behavior.
+
+---
+
+### March 2026 — Spatial Parameter Fields
+
+The latest breakthrough: instead of one global parameter value steering the whole grid, each cell now gets its own value from a slowly drifting 2D field. Different regions of the grid live in different behavioral regimes simultaneously. The field drifts continuously — what was spiral territory becomes maze territory becomes near-extinction territory and back again.
+
+The result is real-time morphological evolution: tight hooks become worms become blobs become flowing continental forms, continuously, without resets. The system never locks into a single attractor because no two regions are ever in exactly the same state.
+
+**No retraining required. Pure runtime geometry layered on top of learned physics.**
 
 ---
 

@@ -35,17 +35,25 @@ from display.windows import compute_heat, apply_palette_heat, apply_effect
 CHECKPOINT = os.path.join(
     os.path.dirname(__file__), 'checkpoints', 'lenia_050000.pkl'
 )
+GS_CHECKPOINT = os.path.join(
+    os.path.dirname(__file__), 'checkpoints', 'params_050000.pkl'
+)
 
 # Physics bit — 0.0 = GS mode, 1.0 = Lenia mode.
 # The fused model absorbed both. Start at 0 (GS) where the interesting
 # pulsing ring behavior lives. Press T to flip live and watch the transition.
 PHYSICS_BIT = 0.0
 
+# Quiet mode — disables all autonomous pokes, extreme bursts, and f/k drift.
+# Set True to watch what the model does completely on its own.
+# Set False to restore the full autonomous behaviour.
+QUIET_MODE = True
+
 GRID_H          = 256
 GRID_W          = 256
 SCREEN_W        = 1920  # one monitor width
 SCREEN_H        = 1080
-DUAL_SCREEN     = True  # set False for single monitor
+DUAL_SCREEN     = False  # set False for single monitor
 DISPLAY_W       = SCREEN_W * 2 if DUAL_SCREEN else SCREEN_W
 DISPLAY_H       = SCREEN_H
 FPS             = 30
@@ -244,13 +252,23 @@ def render(surface, grid, palette, render_mode="combined", effect="none"):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def run():
-    if not os.path.exists(CHECKPOINT):
-        print(f"Checkpoint not found: {CHECKPOINT}")
-        print("Run nca/train.py first.")
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--gs', action='store_true',
+                        help='Load original GS-only checkpoint for comparison')
+    args = parser.parse_args()
+
+    ckpt = GS_CHECKPOINT if args.gs else CHECKPOINT
+    label = "GS-only (params_050000)" if args.gs else "Lenia-fused (lenia_050000)"
+
+    if not os.path.exists(ckpt):
+        print(f"Checkpoint not found: {ckpt}")
         sys.exit(1)
 
-    print(f"Loading checkpoint: {CHECKPOINT}")
-    with open(CHECKPOINT, 'rb') as f:
+    print(f"Loading checkpoint: {ckpt}  [{label}]")
+    if QUIET_MODE:
+        print("QUIET MODE — autonomous pokes/drift disabled")
+    with open(ckpt, 'rb') as f:
         params = pickle.load(f)
     params = jax.device_put(params)
     print("Loaded.")
@@ -449,7 +467,7 @@ def run():
         # Every DRIFT_EVERY steps, nudge the center f/k values.
         # This shifts the whole spatial field — every region moves together
         # but they all stay offset from each other.
-        if step_count % DRIFT_EVERY == 0:
+        if not QUIET_MODE and step_count % DRIFT_EVERY == 0:
             df = np.random.uniform(-DRIFT_AMOUNT, DRIFT_AMOUNT)
             dk = np.random.uniform(-DRIFT_AMOUNT, DRIFT_AMOUNT)
             f  = float(np.clip(f + df, F_MIN, F_MAX))
@@ -459,7 +477,7 @@ def run():
             jk_field = jnp.array(k_field)
 
         # ── Autonomous extreme burst ──────────────────────────────────────
-        if step_count >= next_extreme and pokes_remaining == 0:
+        if not QUIET_MODE and step_count >= next_extreme and pokes_remaining == 0:
             pre_burst_f     = f
             pre_burst_k     = k
             pokes_remaining = 4
@@ -479,7 +497,7 @@ def run():
         # and reorganizes. Space them out to avoid solid-screen collapse.
 
         # Start a new sequence
-        if pokes_remaining == 0 and step_count >= next_perturb:
+        if not QUIET_MODE and pokes_remaining == 0 and step_count >= next_perturb:
             pokes_remaining = np.random.randint(PERTURB_POKES_MIN, PERTURB_POKES_MAX + 1)
             next_poke       = step_count
             print(f"Perturbation: {pokes_remaining} pokes incoming...")
@@ -519,7 +537,7 @@ def run():
         # ── Saturation detection ──────────────────────────────────────────
         # Only fires when the screen is truly solid — threshold lowered from
         # 0.02 to 0.005 so interesting dark/ghost-trace states are left alone.
-        if step_count % SATURATION_CHECK == 0:
+        if not QUIET_MODE and step_count % SATURATION_CHECK == 0:
             b_std = float(jnp.std(grid[:, :, CH_B]))
             if b_std < SATURATION_STD:
                 # Pick fresh safe f/k — current values may be extreme/clipped

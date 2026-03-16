@@ -32,8 +32,8 @@ from nca.model import (
 )
 from nca.lenia import (
     CH_PHYSICS, LENIA_R,
-    init_lenia_pool, make_lenia_pool_state, make_lenia_target_fn,
-    make_kernel_fft,
+    init_lenia_pool, make_lenia_pool_state, make_lenia_pool_state_v2,
+    make_lenia_target_fn, make_kernel_fft,
 )
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -42,25 +42,31 @@ TRAIN_W = 64
 
 POOL_SIZE        = 512
 BATCH_SIZE       = 32
-TRAIN_STEPS      = 50000
+TRAIN_STEPS      = 100000   # 2x previous run — more time to internalize 3 species + continuous ch13
 ROLLOUT_STEPS    = 8
-LEARNING_RATE    = 1e-4      # lower than original — fine-tuning not cold training
+LEARNING_RATE    = 5e-5     # lower than v1 — fine-tuning from strong checkpoint
 PERSIST_WEIGHT   = 0.1
 PERSIST_NOISE    = 0.02
 CHECKPOINT_EVERY = 1000
 LOG_EVERY        = 100
 
 CHECKPOINT_DIR = os.path.join(os.path.dirname(__file__), 'checkpoints')
-GS_CHECKPOINT  = os.path.join(CHECKPOINT_DIR, 'params_050000.pkl')
+LENIA_CHECKPOINT = os.path.join(CHECKPOINT_DIR, 'lenia_050000.pkl')  # start from fused checkpoint
+
+# Sample ch13 uniformly from [0, 1] during training instead of hard 0/1.
+# Teaches the model the full interpolation spectrum between GS and Lenia.
+CH13_CONTINUOUS = True
+
+# Initialize hidden channels (ch2-12) with small random noise in pool states.
+# Forces the model to learn to use hidden state rather than ignore it.
+HIDDEN_INIT_NOISE = 0.05
 
 # Lenia ratio schedule: step threshold → n_lenia samples per batch of 32
-# n_gs = BATCH_SIZE - n_lenia
-# Start conservative — let GS knowledge stay dominant early.
+# More Lenia earlier — we already know the model handles GS well.
 LENIA_SCHEDULE = [
-    (0,    5),    # steps    0–199:   5/32 = 15% Lenia
-    (200,  6),    # steps  200–499:   6/32 = 19%
-    (500, 10),    # steps  500–799:  10/32 = 31%
-    (800, 13),    # steps  800+:     13/32 = 41%
+    (0,     8),   # steps     0–499:   8/32 = 25% Lenia
+    (500,  12),   # steps   500–999:  12/32 = 37%
+    (1000, 16),   # steps  1000+:     16/32 = 50% — equal weighting
 ]
 
 # Lenia pool refresh: replace one Lenia pool state every N steps
@@ -94,9 +100,11 @@ def make_gs_pool_state(key, H, W):
     grid = np.zeros((H, W, N_CHANNELS), dtype=np.float32)
     grid[:, :, CH_A]       = np.array(A)
     grid[:, :, CH_B]       = np.array(B)
-    grid[:, :, CH_PHYSICS] = 0.0    # physics bit = GS
+    grid[:, :, CH_PHYSICS] = float(np.random.uniform(0.0, 0.3)) if CH13_CONTINUOUS else 0.0
     grid[:, :, CH_F]       = f
     grid[:, :, CH_K]       = k
+    # Hidden channel noise — forces model to learn to use ch2-12, not ignore them
+    grid[:, :, 2:13] = np.random.normal(0.0, HIDDEN_INIT_NOISE, (H, W, 11)).astype(np.float32)
     return grid
 
 
@@ -249,12 +257,13 @@ def load_checkpoint(path):
 
 def train():
     print("=" * 60)
-    print(" Somnivex — Dual-Teacher NCA (GS + Lenia)")
-    print(" Fine-tuning GS checkpoint with Lenia creatures")
+    print(" Somnivex — v2 Training: 3 Species + Continuous ch13 + Hidden Noise")
+    print(" Fine-tuning from fused lenia_050000 checkpoint")
     print("=" * 60)
     print(f"\n JAX: {jax.devices()}")
     print(f" Grid: {TRAIN_H}x{TRAIN_W}  Pool: {POOL_SIZE}  Batch: {BATCH_SIZE}")
     print(f" Steps: {TRAIN_STEPS}  LR: {LEARNING_RATE}  Rollout: {ROLLOUT_STEPS}")
+    print(f" Hidden noise: {HIDDEN_INIT_NOISE}  Continuous ch13: {CH13_CONTINUOUS}")
     print()
 
     # ── Model init ────────────────────────────────────────────────────────
@@ -265,13 +274,13 @@ def train():
     dummy = jnp.zeros((TRAIN_H, TRAIN_W, N_CHANNELS * N_FILTERS))
     params = update_net.init(subkey, dummy)
 
-    if not os.path.exists(GS_CHECKPOINT):
-        print(f"ERROR: GS checkpoint not found: {GS_CHECKPOINT}")
-        print("Run nca/train.py first.")
+    if not os.path.exists(LENIA_CHECKPOINT):
+        print(f"ERROR: Fused checkpoint not found: {LENIA_CHECKPOINT}")
+        print("Expected lenia_050000.pkl from v1 training.")
         sys.exit(1)
-    params = load_checkpoint(GS_CHECKPOINT)
+    params = load_checkpoint(LENIA_CHECKPOINT)
     n_params = sum(x.size for x in jax.tree_util.tree_leaves(params))
-    print(f" Loaded: {GS_CHECKPOINT}  ({n_params:,} params)\n")
+    print(f" Loaded: {LENIA_CHECKPOINT}  ({n_params:,} params)\n")
 
     optimizer = optax.chain(
         optax.clip_by_global_norm(1.0),
@@ -369,8 +378,10 @@ def train():
 
         # Lenia: inject one fresh Lenia state every LENIA_REFRESH_EVERY steps
         if step % LENIA_REFRESH_EVERY == 0:
-            lenia_pool[lenia_idx[0]] = make_lenia_pool_state(
-                TRAIN_H, TRAIN_W, fK_np, lenia_rng
+            lenia_pool[lenia_idx[0]] = make_lenia_pool_state_v2(
+                TRAIN_H, TRAIN_W, fK_np, lenia_rng,
+                hidden_noise=HIDDEN_INIT_NOISE,
+                ch13_max=1.0,
             )
 
         # ── Logging ───────────────────────────────────────────────────────

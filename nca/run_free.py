@@ -382,6 +382,13 @@ def run():
                 if event.key == pygame.K_q:
                     running = False
 
+                if event.key == pygame.K_h:
+                    grid_np = np.array(grid)
+                    B_now = grid_np[:, :, CH_B]
+                    grid_np[:, :, 2:13] = B_now[:, :, np.newaxis]
+                    grid = jnp.array(grid_np)
+                    print(f"H — hidden channels seeded from B. Model has full control.")
+
                 if event.key == pygame.K_s:
                     try:
                         save_path = os.path.join(
@@ -686,7 +693,7 @@ def run():
         palette_str = palette_names[palette_idx]
         free_str = "  |  FREE-CH" if (free_channels and step_count >= FREE_WARMUP) else ""
         hud = font.render(
-            f"step {step_count}  |  bit={physics_bit:.0f}({'L' if physics_bit else 'G'}){free_str}  f={f:.4f}±{FK_SPATIAL_AMP_F} k={k:.4f}±{FK_SPATIAL_AMP_K}  |  {palette_str}  |  {render_mode}+{effect}  |  spd={steps_per_frame}  |  T=physics A=sound M=mode E=effect P=palette F=poke X=extreme Z=chaos S=save L=load R=reset Q=quit",
+            f"step {step_count}  |  bit={physics_bit:.0f}({'L' if physics_bit else 'G'}){free_str}  f={f:.4f}±{FK_SPATIAL_AMP_F} k={k:.4f}±{FK_SPATIAL_AMP_K}  |  {palette_str}  |  {render_mode}+{effect}  |  spd={steps_per_frame}  |  T=physics A=sound M=mode E=effect P=palette F=poke X=extreme Z=chaos H=seed-hidden S=save L=load R=reset Q=quit",
             True, (80, 80, 80)
         )
         screen.blit(hud, (10, 10))

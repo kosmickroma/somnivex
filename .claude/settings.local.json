@@ -58,7 +58,9 @@
       "WebFetch(domain:math.stackexchange.com)",
       "WebFetch(domain:aliveandmore.github.io)",
       "WebFetch(domain:content.wolfram.com)",
-      "Bash(cp:*)"
+      "Bash(cp:*)",
+      "Bash(gh api:*)",
+      "Bash(source:*)"
     ]
   }
 }

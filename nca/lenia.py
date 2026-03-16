@@ -25,11 +25,11 @@ LENIA_DT   = 0.1
 LENIA_R    = 13    # kernel radius — covers all single-ring creatures
 CH_PHYSICS = 13    # physics bit channel (re-injected from outside, not learned)
 
-# ── Official Orbium initial condition ─────────────────────────────────────────
-# Source: Bert Chan, animals.json ("O2b"), https://github.com/Chakazul/Lenia
-# This is the exact published starting pattern that produces a stable glider.
-# Parameters: R=13, mu=0.15, sigma=0.014 (canonical Orbium bicaudatus)
+# ── Official creature initial conditions ──────────────────────────────────────
+# Source: Bert Chan, animals.json, https://github.com/Chakazul/Lenia
+# All three use R=13, kn=1 (exponential bump kernel), gn=1 (Gaussian growth).
 
+# Orbium bicaudatus (O2b) — crescent glider, mu=0.150, sigma=0.014
 _ORBIUM_RLE = (
     "13.pK$14.qV$6.VpA.MpEpKpITqV$4.BpPpNrIrEqDpWpOpLpUqNvT$"
     "4.IqRrNsPsKqHJ3.GqOuC$4.TrLsTrPrLpS6.uUD$3.SpWqNrBqLpRqPqE6.vA$"
@@ -39,6 +39,33 @@ _ORBIUM_RLE = (
     "2.VsU4.DxQyOvVuSwDwQuBrMqSqCF$3.vG5.tEyKwVvIvKvMtVrXqTpM$"
     "4.sU4.qFvDwMvNuUuDsUrKqDO$4.qCrDJ2.pPsKuGuHtOsQrNqKpC$"
     "5.pTqTpVpNqFrJsGsKrVrDqFpFD$6.QqCqJqPqVqXqRqHpOTC$8.LWpFpEXPG!"
+)
+
+# Gyrorbium gyrans (OG2g) — spinning/rotating creature, mu=0.156, sigma=0.0224
+_GYRORBIUM_RLE = (
+    "10.EL2QLE$7.TpU2qHqCpXpUpNpFL$4.JrVtTuKuPuKtLrXqTqHqCpPpDG$"
+    "3.qWtDqRpKqEsMuXvBtGrApXpUpSpIO$2.rQrN4.pAuAvRtTrIpUpIpKpFO$"
+    ".pSsM6.tJwFuNsPsFrVpPpDL$.uFB6.tJ2yO2yLyOyDsKL$"
+    "pDuC6.pFxW3yOwIwD2xPqH$rNtV5.EsMxCyIyOwXtJsMtJwFuX$"
+    "sHuSV3.EpDvOwFxEwQsRqR2qHsFvWE$rQvJsWpPQpKpSqCvEvBuCpD3.BpDtGrQ$"
+    "pXuKvMuPtLsWsCrIuCtBrS6.qWrQ$EsKvEwXyBwLtVrVsCrDqH6.pXrG$"
+    ".qHtVxJyOwQrQpNqJpPV6.qJqE$.JsUxMyOrX10.pFqRJ$"
+    "2.rQxPwIpI9.pKqJT$2.qJxEuPpKB7.qCpP$2.EvOvMpPO5.TrGqH$"
+    "3.sCyOqEpIOEBOqHqEsRtG$4.xMsMqJqCpXqJqRpIqOuCtBsF$"
+    "5.xPrAqTqMpSE.rSsMrLqRqHV.TpS$6.vErDE2.VpPB$7.pIrNqHpKQ!"
+)
+
+# Scutium solidus (S1s) — slow dense tank, mu=0.290, sigma=0.045
+_SCUTIUM_RLE = (
+    "5.pGQ$6.sUsDqRR$4.VpXrJwKvNtXrW$2.ApVrGrWsIwKyOyDwTuNO$"
+    "2.qArOrIqIpPpTxH2yOyIvKqG$rVpIrNrJpH4.xP3yOvFqWA$"
+    "sKvNsKqE5.pI4yOuHqPC$sNxBuMpD5.JuN3yOwXsUpN$"
+    "sGxFyOT5.pCtIyF3yOuKqUH$rPwXyOxT5.qKtSxS3yOvIrQT$"
+    "pQwK2yOtWXJXqHsGuWxW3yOvPsApC$.vQ3yOuVsLsGsXuMwOyK3yOvHrVpC$"
+    ".rKyK3yOxEwBwCwXyE3yOxQuMrJU$.WvC5yOyM5yOwFtJqOL$"
+    "2.rVwO9yOwWuMsApOC$2.pLtBwK6yOyJwQuTsQqLP$"
+    "3.qHsWvEwUxTyCxRwWvRuGsNqSpA$3.HqBrUtHuGuPuLtVsXrSqIXB$"
+    "4.DpDqEqW2rIqWqGpJN$6.ENTUPHA!"
 )
 
 def _ch2val(c):
@@ -73,12 +100,21 @@ def _decode_orbium_rle(st):
         r.extend([0.0] * (max_len - len(r)))
     return np.array(rows, dtype=np.float32)
 
-# Decode once at import time — 20x20 array, values in [0, 1]
-ORBIUM_SEED = _decode_orbium_rle(_ORBIUM_RLE)
+# Decode once at import time
+ORBIUM_SEED    = _decode_orbium_rle(_ORBIUM_RLE)
+GYRORBIUM_SEED = _decode_orbium_rle(_GYRORBIUM_RLE)
+SCUTIUM_SEED   = _decode_orbium_rle(_SCUTIUM_RLE)
 
 # Known creature parameters (canonical Lenia values from Chan 2019).
 LENIA_CREATURES = {
-    "orbium": dict(mu=0.150, sigma=0.014),   # canonical Orbium bicaudatus
+    "orbium":    dict(mu=0.150, sigma=0.014),
+    "gyrorbium": dict(mu=0.156, sigma=0.0224),
+    "scutium":   dict(mu=0.290, sigma=0.045),
+}
+CREATURE_SEEDS = {
+    "orbium":    ORBIUM_SEED,
+    "gyrorbium": GYRORBIUM_SEED,
+    "scutium":   SCUTIUM_SEED,
 }
 CREATURE_NAMES = list(LENIA_CREATURES.keys())
 
@@ -151,18 +187,12 @@ def lenia_step_np(A, fK_np, mu, sigma):
 
 # ── Initial conditions ─────────────────────────────────────────────────────────
 
-def seed_creature(H, W, rng):
-    """
-    Place the official Orbium initial condition (20x20) at a random position.
-
-    Uses the exact published seed from Chan 2019 — the hand-crafted ring seed
-    does NOT work because sigma=0.014 requires a precise starting distribution.
-    Small noise added to break rotational symmetry so creature can start moving.
-    """
+def seed_creature(H, W, rng, creature_name="orbium"):
+    """Place the official initial condition for the given creature at a random position."""
+    seed = CREATURE_SEEDS[creature_name]
     A = np.zeros((H, W), dtype=np.float32)
-    sh, sw = ORBIUM_SEED.shape   # 20 x 20
+    sh, sw = seed.shape
 
-    # Random placement with margins so creature doesn't start at edges
     margin = sh
     cx = int(rng.integers(margin, H - margin))
     cy = int(rng.integers(margin, W - margin))
@@ -170,13 +200,12 @@ def seed_creature(H, W, rng):
     r0, r1 = cx, cx + sh
     c0, c1 = cy, cy + sw
 
-    # Clamp to grid bounds (shouldn't happen with margins but be safe)
     seed_r0 = max(0, -cx)
     seed_c0 = max(0, -cy)
     r0, r1 = max(0, r0), min(H, r1)
     c0, c1 = max(0, c0), min(W, c1)
 
-    A[r0:r1, c0:c1] = ORBIUM_SEED[seed_r0:seed_r0+(r1-r0), seed_c0:seed_c0+(c1-c0)]
+    A[r0:r1, c0:c1] = seed[seed_r0:seed_r0+(r1-r0), seed_c0:seed_c0+(c1-c0)]
     return A
 
 
@@ -194,7 +223,7 @@ def make_lenia_pool_state(H, W, fK_np, rng):
     """
     r = rng.random()
     creature_name = rng.choice(CREATURE_NAMES)
-    c = LENIA_CREATURES[creature_name]
+    c     = LENIA_CREATURES[creature_name]
     mu    = float(c['mu'])
     sigma = float(c['sigma'])
 
@@ -209,7 +238,7 @@ def make_lenia_pool_state(H, W, fK_np, rng):
             sigma = float(np.clip(sigma + rng.uniform(-0.003, 0.003), 0.005, 0.08))
         # r >= 0.80: damaged (sector removed mid-warmup below)
 
-        A = seed_creature(H, W, rng)
+        A = seed_creature(H, W, rng, creature_name)
         warmup = rng.integers(150, 350)
         damaged = (r >= 0.80)
 
@@ -231,6 +260,22 @@ def make_lenia_pool_state(H, W, fK_np, rng):
     grid[:, :, CH_PHYSICS] = 1.0   # physics bit
     grid[:, :, CH_F]       = mu
     grid[:, :, CH_K]       = sigma
+    return grid
+
+
+def make_lenia_pool_state_v2(H, W, fK_np, rng, hidden_noise=0.05, ch13_max=1.0):
+    """
+    Extended pool state builder for v2 training:
+    - hidden_noise: std of Gaussian noise added to ch2-12 (forces model to use hidden state)
+    - ch13_max: if < 1.0, samples ch13 from Uniform(0, ch13_max) for continuous physics spectrum
+    """
+    grid = make_lenia_pool_state(H, W, fK_np, rng)
+    # Hidden channel noise
+    if hidden_noise > 0:
+        grid[:, :, 2:13] += rng.normal(0.0, hidden_noise, (H, W, 11)).astype(np.float32)
+    # Continuous physics bit — model learns the full GS↔Lenia spectrum
+    if ch13_max < 1.0:
+        grid[:, :, CH_PHYSICS] = float(rng.uniform(0.7, ch13_max))
     return grid
 
 

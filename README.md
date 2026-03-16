@@ -7,10 +7,59 @@ A compact NCA (17,000 parameters) trained simultaneously on two incompatible phy
 
 ---
 
+---
+
+## Gallery
+
+All images are unedited captures from the live simulation. No post-processing beyond the in-engine palette and render mode.
+
+---
+
+**Spontaneous Orbium reconstruction** — GS mode (physics bit = 0), no Lenia seed, no Lenia kernel running. The model was trained on one Lenia creature: Orbium bicaudatus, a crescent-shaped glider. Starting from Gray-Scott chemistry, it reconstructed that exact morphology as a free attractor. Step 1030: scattered crescent gliders. Step 4405: a complex multi-structure organism. Step 6375: the organism resolving into a crescent. Step 6870: a stable Orbium-like glider with rolling internal structure — the training creature's morphology, reconstructed from scratch.
+
+| | | | |
+|---|---|---|---|
+| ![](screenshots/orbium_reconstruction_a.png) | ![](screenshots/orbium_reconstruction_b.png) | ![](screenshots/orbium_reconstruction_c.png) | ![](screenshots/orbium_reconstruction_d.png) |
+
+---
+
+**Exotic attractor: toroidal standing wave** — activation concentrates at the grid perimeter, dark void at center. The wrap-around boundary conditions become a global stable state. Reproducible from multiple starting points via physics bit flip.
+
+| | |
+|---|---|
+| ![](screenshots/lenia_fusion_toroidal_frame.png) | ![](screenshots/toroidal_frame_fog.png) |
+
+---
+
+**Anti-creature locomotion** — dark voids translating through a solid activation field. Negative-space solitons. Neither Gray-Scott nor Lenia produces these. They emerge from the fused model spontaneously, merge with each other, and vary in size and speed.
+
+| | |
+|---|---|
+| ![](screenshots/lenia_fusion_anti_creatures.png) | ![](screenshots/nca_blobs_purple_void.png) |
+
+---
+
+**Anti-creature morphology sequence** — the same anti-creature evolving its shape over ~1600 steps. Compact void (step 58280) → growing corona (58645) → elongated crescent (59930). GS mode, no intervention.
+
 | | | |
 |---|---|---|
-| ![](screenshots/lenia_fusion_anti_creatures.png) | ![](screenshots/lenia_fusion_synchronized_blobs.png) | ![](screenshots/lenia_fusion_toroidal_frame.png) |
 | ![](screenshots/neon_anti_creature_a.png) | ![](screenshots/neon_anti_creature_b.png) | ![](screenshots/neon_anti_creature_c.png) |
+
+---
+
+**Synchronized blob arrays** — self-organized groups of structures maintaining coordinated spacing while drifting. Each blob on its own trajectory. The array holds formation without any explicit coordination — each cell only sees a 3×3 neighborhood.
+
+| | |
+|---|---|
+| ![](screenshots/lenia_fusion_synchronized_blobs.png) | ![](screenshots/spatial_blob_outlines_purple.png) |
+
+---
+
+**Free-running GS-mode behaviors** — the fused model running under GS physics interpretation. Spatial f/k variation keeps different regions in different regimes simultaneously. These states emerge without any Lenia influence — the fused weights change how even the GS side behaves.
+
+| | | |
+|---|---|---|
+| ![](screenshots/spatial_large_blobs_blue.png) | ![](screenshots/spatial_worms_swirl_blue.png) | ![](screenshots/neon_rings.png) |
 
 ---
 

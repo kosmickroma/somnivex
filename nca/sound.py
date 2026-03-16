@@ -27,25 +27,29 @@ D1_FREQ_MAX = 330.0   # E4
 D2_FREQ_MIN = 165.0   # E3
 D2_FREQ_MAX = 495.0   # B4
 
-BELL_FREQ   = 528.0   # event bell
-SHIMMER_FREQ = 700.0  # theremin/synth-pad range — less harsh than 1800Hz
-
-# ── Volumes ───────────────────────────────────────────────────────────────────
-D1_VOL      = 0.10
-D2_VOL      = 0.07
-BELL_VOL    = 0.12
-SHIMMER_VOL = 0.004
+BELL_FREQ   = 432.0   # event bell
 BELL_DECAY  = 0.9996  # ~2.5s tail
 
-# ── Slow LFO — the sound "breathes" at 0.06Hz (~17s per cycle) ───────────────
+# ── Volumes ───────────────────────────────────────────────────────────────────
+D1_VOL   = 0.10
+D2_VOL   = 0.08
+BELL_VOL = 0.12
+
+# ── Slow volume LFO — the sound "breathes" at 0.06Hz (~17s per cycle) ────────
 LFO_RATE  = 0.06
-LFO_DEPTH = 0.25   # ±25% volume modulation
+LFO_DEPTH = 0.25
+
+# ── Pitch LFOs — each drone wanders independently so sound never settles ──────
+# Out of phase and different rates — they beat against each other unpredictably
+D1_PITCH_LFO_RATE  = 0.05    # Hz — one wander every ~20s
+D1_PITCH_LFO_DEPTH = 25.0    # ±25Hz
+D2_PITCH_LFO_RATE  = 0.077   # Hz — prime-ish ratio to D1, never syncs
+D2_PITCH_LFO_DEPTH = 18.0    # ±18Hz
 
 # ── Smoothing ─────────────────────────────────────────────────────────────────
-D1_ALPHA      = 0.03   # slow glide
-D2_ALPHA      = 0.06   # slightly faster — two drones move differently
-PAN_ALPHA     = 0.05
-SHIMMER_ALPHA = 0.10
+D1_ALPHA  = 0.03
+D2_ALPHA  = 0.06
+PAN_ALPHA = 0.05
 
 # ── Event detection ───────────────────────────────────────────────────────────
 # Track B channel std over a rolling window.
@@ -60,7 +64,6 @@ class SoundEngine:
         self._t_d1_freq  = 220.0
         self._t_d2_freq  = 330.0
         self._t_pan      = 0.5
-        self._t_shimmer  = 0.0
         self._t_vol      = 0.8
         self._bell_pend  = False
         self._muted      = False
@@ -69,13 +72,13 @@ class SoundEngine:
         self._d1_freq    = 220.0
         self._d2_freq    = 330.0
         self._pan        = 0.5
-        self._shimmer    = 0.0
-        self._ph_d1      = 0.0
-        self._ph_d2      = 0.0
-        self._ph_sh      = 0.0
-        self._ph_bell    = 0.0
-        self._ph_lfo     = 0.0
-        self._bell_amp   = 0.0
+        self._ph_d1        = 0.0
+        self._ph_d2        = 0.0
+        self._ph_bell      = 0.0
+        self._ph_lfo       = 0.0
+        self._ph_pitch_d1  = 0.0
+        self._ph_pitch_d2  = np.pi   # start out of phase with D1
+        self._bell_amp     = 0.0
 
         # Event detection (main thread)
         self._b_std_hist = deque(maxlen=EVENT_WINDOW)
@@ -128,10 +131,6 @@ class SoundEngine:
         x_norm  = np.linspace(0.0, 1.0, W, dtype=np.float32)
         self._t_pan = float(np.sum(B_abs * x_norm[None, :]) / b_total)
 
-        # Shimmer — spatial variance of B (how complex the field is)
-        b_var = float(np.var(B))
-        self._t_shimmer = float(np.clip(b_var * 3.0, 0.0, 1.0))
-
         # Volume — activity level
         b_mean = float(np.mean(B_abs))
         self._t_vol = float(np.clip(0.4 + b_mean * 4.0, 0.3, 1.0))
@@ -148,7 +147,6 @@ class SoundEngine:
         t_d1  = self._t_d1_freq
         t_d2  = self._t_d2_freq
         t_pan = self._t_pan
-        t_sh  = self._t_shimmer
         t_vol = 0.0 if self._muted else self._t_vol
 
         if self._bell_pend:
@@ -158,13 +156,20 @@ class SoundEngine:
         n = np.arange(frames, dtype=np.float64)
 
         # Smooth tracking
-        self._d1_freq += (t_d1  - self._d1_freq) * D1_ALPHA
-        self._d2_freq += (t_d2  - self._d2_freq) * D2_ALPHA
-        self._pan     += (t_pan  - self._pan)     * PAN_ALPHA
-        self._shimmer += (t_sh   - self._shimmer) * SHIMMER_ALPHA
+        self._d1_freq += (t_d1 - self._d1_freq) * D1_ALPHA
+        self._d2_freq += (t_d2 - self._d2_freq) * D2_ALPHA
+        self._pan     += (t_pan - self._pan)     * PAN_ALPHA
 
-        d1 = max(self._d1_freq, 20.0)
-        d2 = max(self._d2_freq, 20.0)
+        # Pitch LFOs — independent wander on each drone
+        p1_dp = 2.0 * np.pi * D1_PITCH_LFO_RATE / SAMPLE_RATE
+        p2_dp = 2.0 * np.pi * D2_PITCH_LFO_RATE / SAMPLE_RATE
+        pitch_offset_d1 = np.sin(self._ph_pitch_d1) * D1_PITCH_LFO_DEPTH
+        pitch_offset_d2 = np.sin(self._ph_pitch_d2) * D2_PITCH_LFO_DEPTH
+        self._ph_pitch_d1 = (self._ph_pitch_d1 + frames * p1_dp) % (2.0 * np.pi)
+        self._ph_pitch_d2 = (self._ph_pitch_d2 + frames * p2_dp) % (2.0 * np.pi)
+
+        d1 = max(self._d1_freq + pitch_offset_d1, 20.0)
+        d2 = max(self._d2_freq + pitch_offset_d2, 20.0)
         pan = float(np.clip(self._pan, 0.0, 1.0))
 
         # LFO — slow breathing
@@ -189,11 +194,6 @@ class SoundEngine:
         ) * D2_VOL
         self._ph_d2 = (self._ph_d2 + frames * dp2) % (2.0 * np.pi)
 
-        # Shimmer
-        sh_dp  = 2.0 * np.pi * SHIMMER_FREQ / SAMPLE_RATE
-        shimmer_sig = np.sin(self._ph_sh + n * sh_dp) * self._shimmer * SHIMMER_VOL
-        self._ph_sh = (self._ph_sh + frames * sh_dp) % (2.0 * np.pi)
-
         # Bell
         bell_sig = np.zeros(frames)
         if self._bell_amp > 1e-6:
@@ -203,7 +203,7 @@ class SoundEngine:
             self._ph_bell = (self._ph_bell + frames * b_dp) % (2.0 * np.pi)
             self._bell_amp *= (BELL_DECAY ** frames)
 
-        mono = (sig1 + sig2 + shimmer_sig + bell_sig) * lfo_env * t_vol
+        mono = (sig1 + sig2 + bell_sig) * lfo_env * t_vol
 
         # Constant-power pan
         outdata[:, 0] = (mono * np.sqrt(1.0 - pan)).astype(np.float32)

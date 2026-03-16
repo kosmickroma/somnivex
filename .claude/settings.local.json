@@ -57,7 +57,8 @@
       "WebFetch(domain:www.algorithmicbotany.org)",
       "WebFetch(domain:math.stackexchange.com)",
       "WebFetch(domain:aliveandmore.github.io)",
-      "WebFetch(domain:content.wolfram.com)"
+      "WebFetch(domain:content.wolfram.com)",
+      "Bash(cp:*)"
     ]
   }
 }

@@ -7,6 +7,10 @@ dist/
 build/
 .eggs/
 
+# Private notes and dev todos
+notes/
+kktodo*.md
+
 # Runtime files — personal data, not for repo
 ratings_log.json
 somnivex.log

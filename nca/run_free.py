@@ -30,6 +30,7 @@ from nca.lenia import CH_PHYSICS
 from gs.engine import GS_REGIMES, gs_step, init_gs_grid
 from nca.params import PALETTES
 from display.windows import compute_heat, apply_palette_heat, apply_effect
+from nca.sound import SoundEngine
 
 # ── Config ────────────────────────────────────────────────────────────────────
 CHECKPOINT = os.path.join(
@@ -48,6 +49,8 @@ PHYSICS_BIT = 0.0
 # Set True to watch what the model does completely on its own.
 # Set False to restore the full autonomous behaviour.
 QUIET_MODE = True
+
+SOUND_ENABLED = True   # set False to disable audio entirely
 
 GRID_H          = 256
 GRID_W          = 256
@@ -308,6 +311,10 @@ def run():
     print(f"Starting regime: {regime_names[regime_idx]}  f={f:.4f}  k={k:.4f}")
     print(f"Controls: R=reset  F=next regime  P=palette  Q=quit\n")
 
+    sound = SoundEngine()
+    if SOUND_ENABLED:
+        sound.start()
+
     step_count      = 0
     running         = True
     auto_nudges     = 0
@@ -422,6 +429,10 @@ def run():
                 if event.key == pygame.K_t:
                     physics_bit = 1.0 - physics_bit
                     print(f"Physics bit → {physics_bit:.0f}  ({'Lenia' if physics_bit == 1.0 else 'GS'})")
+
+                if event.key == pygame.K_a:
+                    if SOUND_ENABLED:
+                        sound.toggle_mute()
 
                 if event.key == pygame.K_x:
                     pre_burst_f     = f
@@ -585,12 +596,16 @@ def run():
         else:
             blended_palette = palette_current
 
+        # ── Sound update ──────────────────────────────────────────────────
+        if SOUND_ENABLED:
+            sound.update(np.array(grid))
+
         # ── Render ────────────────────────────────────────────────────────
         render(screen, grid, blended_palette.astype(np.uint8).tolist(), render_mode, effect)
 
         palette_str = palette_names[palette_idx]
         hud = font.render(
-            f"step {step_count}  |  bit={physics_bit:.0f}({'L' if physics_bit else 'G'})  f={f:.4f}±{FK_SPATIAL_AMP_F} k={k:.4f}±{FK_SPATIAL_AMP_K}  |  {palette_str}  |  {render_mode}+{effect}  |  spd={steps_per_frame}  |  T=physics M=mode E=effect P=palette F=poke X=extreme Z=chaos R=reset Q=quit",
+            f"step {step_count}  |  bit={physics_bit:.0f}({'L' if physics_bit else 'G'})  f={f:.4f}±{FK_SPATIAL_AMP_F} k={k:.4f}±{FK_SPATIAL_AMP_K}  |  {palette_str}  |  {render_mode}+{effect}  |  spd={steps_per_frame}  |  T=physics A=sound M=mode E=effect P=palette F=poke X=extreme Z=chaos R=reset Q=quit",
             True, (80, 80, 80)
         )
         screen.blit(hud, (10, 10))
@@ -598,6 +613,8 @@ def run():
         pygame.display.flip()
         ticker.tick(FPS)
 
+    if SOUND_ENABLED:
+        sound.stop()
     pygame.quit()
 
 

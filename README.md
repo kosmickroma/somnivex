@@ -1,194 +1,216 @@
 # Somnivex
-*somnium (dream) + texere (to weave) — dream weave*
+*somnium (dream) + texere (to weave)*
 
-**Autonomous generative art. Runs forever. Never repeats.**
+### Autonomous Neural Cellular Automaton — Multi-Physics Fusion & Emergent Dynamics
 
-[![Watch the demo](https://img.youtube.com/vi/buNGsdpu__8/maxresdefault.jpg)](https://www.youtube.com/watch?v=buNGsdpu__8)
+A compact NCA (17,000 parameters) trained simultaneously on two incompatible physics systems — Gray-Scott reaction-diffusion and Lenia — that developed a shared internal representation and now produces attractor states belonging to neither teacher. Runs indefinitely without intervention. Never repeats.
+
+---
 
 | | | |
 |---|---|---|
-| ![](screenshots/rings_pink.png) | ![](screenshots/chromatic_spots.png) | ![](screenshots/neon_rings.png) |
-| ![](screenshots/gold_channels.png) | ![](screenshots/fingerprint_green.png) | ![](screenshots/rings_dark_pink.png) |
-
-Somnivex is an open-source generative art system built on a trained Neural Cellular Automaton. It learned Gray-Scott reaction-diffusion physics from data and now runs those physics from memory — producing patterns that blend and morph between regimes in ways no fixed simulation can. Spirals dissolve into worms. Diamonds collapse into swirls. It finds its own path.
-
-No prompts. No inputs. Just autonomous behavior.
+| ![](screenshots/lenia_fusion_anti_creatures.png) | ![](screenshots/lenia_fusion_synchronized_blobs.png) | ![](screenshots/lenia_fusion_toroidal_frame.png) |
+| ![](screenshots/neon_anti_creature_a.png) | ![](screenshots/neon_anti_creature_b.png) | ![](screenshots/neon_anti_creature_c.png) |
 
 ---
 
-### March 2026 — Spatial Parameter Fields
+## The Discovery
 
-The latest breakthrough: instead of one global parameter value steering the whole grid, each cell now gets its own value from a slowly drifting 2D field. Different regions of the grid live in different behavioral regimes simultaneously. The field drifts continuously — what was spiral territory becomes maze territory becomes near-extinction territory and back again.
+We trained a single NCA on two completely different physics simultaneously:
 
-The result is real-time morphological evolution: tight hooks become worms become blobs become flowing continental forms, continuously, without resets. The system never locks into a single attractor because no two regions are ever in exactly the same state.
+**Gray-Scott reaction-diffusion** — the classic system that produces spirals, worms, coral, and spots. Structures fill space but never translate. Nothing moves.
 
-**No retraining required. Pure runtime geometry layered on top of learned physics.**
+**Lenia** — a continuous cellular automaton that produces discrete moving creatures (solitons). Orbium bicaudatus, the canonical Lenia glider — a crescent-shaped organism that swims continuously through empty space.
 
----
+One model. One set of weights. Two incompatible teachers. A "physics bit" (channel 13) signals which physics to apply: 0.0 = GS, 1.0 = Lenia.
 
-## What it looks like
-
-**Phase 1 (Gray-Scott):** 15 distinct behavioral regimes — spirals, maze, fingerprint, bacteria, uskate world, and more. 117 color palettes, 5 rendering modes, 6 post-processing effects. The world drifts between regimes every few minutes.
-
-**Phase 2 (NCA Free Run):** A neural network trained on Gray-Scott physics runs entirely on its own output. It knows all 15 regimes simultaneously — f and k control channels steer it, but it blends and interprets them through its own learned weights. Diamonds that evolve into ovals. Swirls that emerge from the collapse of structure. Things GS alone never does.
-
-**Rendering modes** — same chemistry, completely different image:
-- `B` — raw chemical concentration (classic)
-- `edges` — structure boundaries glow, spirals become rings
-- `reaction` — only the active chemistry zone lights up
-- `differential` — maximum contrast at the reaction front
-- `A_inv` — the food layer, inverted
-
-**Effects** — applied on top of any mode:
-- bloom, vignette, chromatic aberration, film grain, scanlines
+The model had to find a shared internal representation. In free run, it uses that representation to produce things neither teacher predicted.
 
 ---
 
-## Screen modes
+## What Emerged
 
-**Single screen** — fullscreen on one monitor.
+The GS-only model requires constant external perturbation to avoid locking into a fixed attractor within 5,000–15,000 steps. The fused model ran **400,000+ steps with zero human intervention** and never repeated.
 
-**Mirrored dual screen** — one wide window spanning two monitors, same image on both. Set `DUAL_SCREEN = True` in `config.py`.
+Behaviors observed that exist in neither training distribution:
+
+**Directed locomotion on non-Orbium structures** — blobs, U-shapes, and worms translate through space. GS structures never move. The model trained on one Lenia creature and generalized the *principle* of locomotion to every structure it invented.
+
+**Spontaneous Orbium reconstruction** — U-shaped gliders appear from GS starting conditions with no Lenia seed and no Lenia kernel running. The model reconstructed the training creature's morphology as a free attractor.
+
+**Trail reabsorption** — structures dart and leave a wake that gets pulled back into them. No analog in either teacher.
+
+**Spiral launch** — a structure executes a spiral then translates away as a glider. GS spirals are stationary. Lenia creatures don't spiral first. This is new.
+
+**Active absorption** — smaller structures pulled toward larger ones at a distance before contact. Centripetal force. Does not exist in reaction-diffusion.
+
+**Synchronized blob arrays** — self-organized groups maintain coordinated spacing while drifting. Each blob on its own trajectory. The array holds formation.
+
+**Anti-creatures** — dark voids translating through a solid activation field. The *absence* of activation as the entity. Negative-space solitons.
+
+**Anti-creature merging** — multiple voids combine into a single larger elongated structure.
+
+**Toroidal standing wave** — activation frame around the entire grid perimeter, dark void at center. The grid's wrap-around boundary conditions made visible as a global attractor. Reproduced across multiple runs.
+
+**Fog field** — slow dark ripples through a uniform medium. Emerges spontaneously after near-extinction events. The system self-recovers without resetting.
 
 ---
 
-## Running it
+## The Physics Bit is a Dial, Not a Switch
 
-> **Tested on Linux (Ubuntu 24.04) only.** CUDA required for GPU mode — CPU-only works but slower.
+The behaviors above are not locked behind the Lenia physics mode. Lenia-mode behaviors bleed into GS mode spontaneously because the weights can't fully separate the two physics — they share the same 17,000 parameters. The model doesn't have two modes. It has a continuous behavior space, and ch13 biases which region it explores.
+
+Flipping the physics bit during a run (T key) at any step count can produce exotic global attractors — synchronized flocking, toroidal standing waves, anti-creatures — that are unreachable from a cold start. The hidden channel state accumulated during prior running becomes the launching pad. These states have been reproduced from as early as 3,000 steps with a single keypress.
+
+The hidden channels (ch2–12, 11 floats per cell that nobody assigned meaning to) appear to carry something that behaves like a physical potential field with multiple stable configurations — a landscape with many basins, some only accessible via specific paths through state space.
+
+---
+
+## Novelty
+
+From searching arXiv, GitHub, and the NCA/ALife literature: no one has publicly shipped a single-NCA fusion of Gray-Scott and Lenia (or multi-regime RD blending with emergent novel attractors from a context switch) with this combination of properties:
+
+- One compact weight set reconciling incompatible dynamics
+- Persistent hidden channels carrying "potential" across long runs
+- Physics-bit-style switching unlocking exotic states unreachable from cold start
+- Real-time spatial f/k variation for simultaneous regime coexistence
+- Emergent behaviors not present in either training distribution
+
+Related work exists (conditional NCAs, multi-attractor training, Lenia variants, ASAL for discovering ALife simulations) but this specific combination hasn't been documented.
+
+---
+
+## Sound
+
+Real-time ambient audio driven by the NCA's internal hidden channel state. No external synthesis — the model's own computation becomes the score.
+
+- **Two independent drones** — frequencies track different hidden channel groups (ch2–6, ch7–11). They drift at different speeds, creating harmonic beating as the field evolves.
+- **Spatial stereo** — center of mass of the B channel pans sound left/right. Structures drifting across the grid drift across your headphones.
+- **Shimmer layer** — B channel spatial variance drives a 700Hz overtone. Complex active field = audible shimmer. Calm dark field = near-silence.
+- **Event bells** — sudden changes in field activity (absorptions, collapses, merges) trigger a soft decaying tone detected via rolling-window std analysis.
+- **LFO breathing** — slow 17-second volume envelope keeps the sound alive during calm phases.
 
 ```bash
-# Clone and set up
+sudo apt install libportaudio2
+pip install sounddevice
+```
+
+---
+
+## Running It
+
+```bash
 git clone https://github.com/kosmickroma/somnivex
 cd somnivex
-pip install jax[cuda] flax optax pygame numpy
+pip install jax[cuda] flax optax pygame numpy sounddevice
+sudo apt install libportaudio2
 
-# Run Gray-Scott screensaver (Phase 1)
-python main.py
-
-# Run NCA free run (Phase 2 — requires trained checkpoint)
+# Fused model — recommended
 python nca/run_free.py
+
+# GS-only model — for comparison
+python nca/run_free.py --gs
 ```
 
-**GS Controls:**
-| Key | Action |
-|-----|--------|
-| `U` | Like this era |
-| `D` | Dislike |
-| `S` | Skip to next regime |
-| `Space` | Pause / unpause |
-| `Q` | Quit |
+> Tested on Ubuntu 24.04, GTX 1650 4GB VRAM, CUDA. CPU-only works but slower.
 
-**NCA Controls:**
+---
+
+## Controls
+
 | Key | Action |
 |-----|--------|
-| `F` | Cycle GS regime (poke the control channels) |
-| `R` | Reset grid with new random seed |
+| `T` | Flip physics bit — shifts between GS and Lenia interpretation of hidden state |
+| `A` | Mute / unmute ambient sound |
+| `M` | Cycle render mode |
+| `E` | Cycle post-processing effect |
 | `P` | Cycle color palette |
+| `F` | Jump to random GS regime |
+| `X` | Extreme burst — pokes f/k outside training range |
+| `Z` | Chaos injection — directly scrambles hidden channels 2–13 |
+| `[` / `]` | Decrease / increase simulation speed |
+| `R` | Reset grid with new random seed |
 | `Q` | Quit |
 
-### Screensaver mode
+---
 
-```bash
-python main.py --screensaver
-```
+## Architecture
 
-On GNOME you can bind this to a keyboard shortcut via Settings → Keyboard → Custom Shortcuts.
+**16 channels per cell:**
+- `0` — chemical A (Gray-Scott)
+- `1` — chemical B (Gray-Scott / Lenia)
+- `2–12` — hidden state (11 channels the NCA owns completely)
+- `13` — physics bit (0.0 = GS, 1.0 = Lenia)
+- `14` — feed rate f / Lenia mu
+- `15` — kill rate k / Lenia sigma
+
+**Perception:** 4 fixed kernels (Identity, Sobel X, Sobel Y, Laplacian) → 64-dim vector per cell.
+
+**UpdateNet:** Dense(64→128 tanh) → Dense(128→16 zero-init). Fire rate 0.5 — each step, half the cells update stochastically. ~17,000 parameters total.
+
+**Dual-teacher training:** Pool of 512 live states. Each step: sample 32 → run NCA 8 steps → compare simultaneously to GS (ch13=0 states) AND Lenia (ch13=1 states) → combined loss → backprop → write outputs back to pool. 50,000 steps, ~4 hours on GTX 1650.
+
+**Spatial f/k fields:** Each cell receives its own f and k from a slowly drifting 2D sine-wave landscape. Different grid regions live in different parameter regimes simultaneously. Four independent phase clocks prevent periodicity. The whole grid can never collapse to one attractor — no two regions are ever in exactly the same state.
 
 ---
 
-## How it works
+## Rendering
 
-### Layer 1 — Gray-Scott reaction-diffusion
+**Modes** — same physics, completely different image:
+`combined` · `B` · `edges` · `reaction` · `differential` · `A_inv`
 
-Two chemicals A (food) and B (predator) obey:
+**Effects:** bloom · vignette · chromatic aberration · film grain · scanlines
 
-```
-dA/dt = Da·∇²A − A·B² + f·(1−A)
-dB/dt = Db·∇²B + A·B² − (f+k)·B
-```
-
-`f` (feed rate) and `k` (kill rate) determine everything. The simulation runs 15 named parameter regimes from Pearson's 1993 catalog, morphing between them instead of resetting hard. Grid is 256×256 on GPU via JAX. ~900 reaction steps per second.
-
-### Layer 2 — Neural Cellular Automaton
-
-A small neural network (17,000 parameters) runs the same update rule on every cell of the grid simultaneously. Each cell sees its 3×3 neighborhood through 4 fixed perception filters (identity, Sobel X, Sobel Y, Laplacian) — 64 inputs total. The network outputs a delta — how much to nudge each of the cell's 16 state channels.
-
-16 channels per cell:
-- `0` — chemical A
-- `1` — chemical B
-- `2–13` — hidden state (the NCA decides what to use these for)
-- `14` — feed rate f (control input)
-- `15` — kill rate k (control input)
-
-**Training:** Pool-based multi-step rollout. A pool of 512 live GS states (random regimes, random ages) is maintained. Each training step: sample 32 states → run NCA 8 steps on its own output → compare to GS running 8 steps from the same start → backprop → write NCA outputs back to pool. 50,000 steps total (~4 hours on a GTX 1650).
-
-The result: one model that internalized all 15 GS regimes simultaneously. Changing f and k mid-run changes its behavior without restarting anything — the NCA reads the control channels every step and responds. But it also has its own interpretation of those physics, expressed through its hidden channels. That's where the non-GS behavior comes from.
-
-### Spatial f/k parameter fields
-
-Instead of broadcasting a single f and k value to every cell, the system generates a smooth 2D noise field — each cell receives its own f and k drawn from a slowly drifting sine-wave landscape. Different regions of the grid live in different parameter regimes simultaneously. One corner might be in spiral territory while another is in near-starvation territory where only ghost traces survive.
-
-The field drifts on four independent phase clocks, so what was worm territory slowly becomes coral territory becomes blob territory without any hard transition. The whole grid can never lock into one attractor because no two regions are ever in exactly the same parameter state. This is implemented entirely at runtime — no retraining required. The landscape is pure geometry layered on top of the trained physics.
+**Palettes:** 117 hand-crafted palettes across 15 color families. Auto-crossfades on a slow timer, preferring same-family transitions 70% of the time for visual continuity.
 
 ---
 
-## Hardware
+## Open Questions
 
-Tested on:
-- GPU: NVIDIA GTX 1650 (4GB VRAM) — CUDA 13.1
-- CPU: Intel i7-2600
-- OS: Ubuntu 24.04
-- Python 3.12 + JAX + Flax + Optax + Pygame
-
-Should run on any CUDA GPU. CPU-only works (slower).
-
----
-
-## Color System
-
-117 hand-crafted palettes across 15 categories: space/celestial, ocean/water, geological/mineral, biological/cellular, industrial, atmospheric, fire variations, digital/terminal, fantasy, neon/electric, moody/desaturated, high contrast, warm/fire, cool/ice, and nature/organic.
+1. What are the hidden channels actually computing? Is there new math in there or a lossy approximation of known physics?
+2. Are there conserved quantities in the hidden channel dynamics? Conservation laws are how new physics gets identified.
+3. The trail reabsorption behavior has no analog in either teacher. What rule produces it?
+4. What happens if we stop re-injecting the control channels entirely and let the model write to all 16 channels freely?
+5. Would training on 5–6 Lenia species generalize even deeper biological principles?
 
 ---
 
 ## Roadmap
 
-### ✅ Phase 1 — Gray-Scott Screensaver
-GPU simulation, 15 regimes, 117 palettes, 5 render modes, 6 effects, dual screen, screensaver mode, preference rating system.
+**Open for collaboration — issues and PRs welcome.**
 
-### ✅ Phase 2 — NCA Physics Training
-Neural Cellular Automaton trained on GS physics via pool-based multi-step rollout. Runs freely on its own output indefinitely. One model covers all 15 regimes via control channels. Produces patterns that blend and morph between GS behaviors in novel ways.
+- `[ ]` **Grid state save/restore** — S key saves grid + step count to disk for reproducible experiments
+- `[ ]` **Gradual physics bit fade** — ramp ch13 over ~1000 steps instead of instant flip
+- `[ ]` **Hidden channel analysis** — PCA/t-SNE of ch2–12 during long runs; map behavior landscape; find emergent conservation laws
+- `[ ]` **Free channel experiment** — stop re-injecting ch13/ch14/ch15; let model write all 16 channels freely
+- `[ ]` **Multi-species Lenia training** — 5 creatures instead of 1; deeper generalization of biological principles
+- `[ ]` **Comparison video** — GS-only vs fused, same seed, same duration, side by side proof
 
-### ✅ Phase 3 — Autonomous Steering
-Saturation detection, autonomous f/k drift, perturbation sequences, extreme bursts, timed reseeds, and autonomous palette crossfading. The system runs indefinitely without intervention.
+---
 
-**Spatial f/k parameter fields** (Phase 3 extension): Each cell gets its own f/k from a drifting 2D noise field. Different regions behave in different regimes simultaneously — the whole grid can never collapse to one state. No retraining required.
+## Hardware
 
-### Phase 4 — Expanded Physics
-Train the NCA on additional reaction-diffusion systems alongside GS — Turing patterns, Lenia, or others. With multiple physics in the training data, the NCA blends them together in free run, producing morphologies that no single system generates alone.
-
-### Phase 5 — Color Intelligence
-Color as part of the NCA's state, not a post-processing lookup. The network learns associations between chemical patterns and color expressions during training. In free run it chooses and evolves its own palette based on what it's doing.
-
-### Phase 6 — Livestream Output
-24/7 autonomous generative art stream. The system runs indefinitely, steers itself away from dead states, and pipes output to OBS. No human needed.
+- GPU: NVIDIA GTX 1650 (4GB VRAM) — CUDA
+- CPU: Intel i7-2600
+- OS: Ubuntu 24.04
+- Python 3.12, JAX, Flax, Optax, Pygame, sounddevice
 
 ---
 
 ## Philosophy
 
-Somnivex is not a tool you operate. It runs on its own, decides everything, and shows you what it made. The only input you can give is signal — like or dislike — and over time the system steers toward what you respond to.
+This started as a screensaver. It is not a screensaver.
 
-The longer-term goal is a system that is genuinely autonomous: one that explores its own parameter space, discovers novel visual states, and sustains itself indefinitely without intervention. The NCA is the first step toward that — a model that learned physics from data and now runs those physics from memory, finding paths through the space that the original equations never would.
+What we built is a model that internalized two incompatible descriptions of reality and synthesized something neither of them predicted. It wasn't told to invent locomotion, anti-creatures, or toroidal standing waves. It found them on its own, as stable solutions in the space between two teachers.
 
----
-
-## Contact
-
-Questions, bugs, ideas — open an issue or reach out:
-📧 kosmickroma@gmail.com
+The longer-term question is what else is in that space.
 
 ---
 
 ## License
 
 MIT. Use it, fork it, build on it.
+
+📧 kosmickroma@gmail.com
+
+*If you're working on NCAs, ALife, generative systems, or multi-physics training — open an issue. This thing wants collaborators.*

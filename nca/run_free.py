@@ -259,10 +259,14 @@ def run():
     parser = argparse.ArgumentParser()
     parser.add_argument('--gs', action='store_true',
                         help='Load original GS-only checkpoint for comparison')
+    parser.add_argument('--free', action='store_true',
+                        help='Free channel experiment: stop injecting ch13/14/15 after warmup')
     args = parser.parse_args()
 
     ckpt = GS_CHECKPOINT if args.gs else CHECKPOINT
     label = "GS-only (params_050000)" if args.gs else "Lenia-fused (lenia_050000)"
+    free_channels = args.free
+    FREE_WARMUP   = 2000   # steps before releasing control channels
 
     if not os.path.exists(ckpt):
         print(f"Checkpoint not found: {ckpt}")
@@ -378,6 +382,50 @@ def run():
                 if event.key == pygame.K_q:
                     running = False
 
+                if event.key == pygame.K_s:
+                    save_path = os.path.join(
+                        os.path.dirname(__file__), 'saves',
+                        f'grid_{step_count:07d}.pkl'
+                    )
+                    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                    save_data = {
+                        'grid': np.array(grid),
+                        'step_count': step_count,
+                        'f': f, 'k': k,
+                        'physics_bit': physics_bit,
+                        'free_channels': free_channels,
+                        'phase_fx': phase_fx, 'phase_fy': phase_fy,
+                        'phase_kx': phase_kx, 'phase_ky': phase_ky,
+                    }
+                    with open(save_path, 'wb') as fh:
+                        pickle.dump(save_data, fh)
+                    print(f"Saved → {save_path}")
+
+                if event.key == pygame.K_l:
+                    import glob
+                    saves_dir = os.path.join(os.path.dirname(__file__), 'saves')
+                    save_files = sorted(glob.glob(os.path.join(saves_dir, 'grid_*.pkl')))
+                    if not save_files:
+                        print("No saves found.")
+                    else:
+                        load_path = save_files[-1]  # most recent
+                        with open(load_path, 'rb') as fh:
+                            save_data = pickle.load(fh)
+                        grid         = jnp.array(save_data['grid'])
+                        step_count   = save_data['step_count']
+                        f            = save_data['f']
+                        k            = save_data['k']
+                        physics_bit  = save_data['physics_bit']
+                        free_channels = save_data.get('free_channels', False)
+                        phase_fx     = save_data['phase_fx']
+                        phase_fy     = save_data['phase_fy']
+                        phase_kx     = save_data['phase_kx']
+                        phase_ky     = save_data['phase_ky']
+                        f_field, k_field = make_fk_field(GRID_H, GRID_W, f, k, phase_fx, phase_fy, phase_kx, phase_ky)
+                        jf_field     = jnp.array(f_field)
+                        jk_field     = jnp.array(k_field)
+                        print(f"Loaded ← {load_path}  (step {step_count})")
+
                 if event.key == pygame.K_r:
                     # Pick a fresh random regime so every reset looks different
                     regime_idx   = np.random.randint(0, len(regime_names))
@@ -453,13 +501,17 @@ def run():
                     print("Z: hidden channel chaos injection")
 
         # ── NCA steps ─────────────────────────────────────────────────────
+        release_physics = free_channels and step_count >= FREE_WARMUP
+        if free_channels and step_count == FREE_WARMUP:
+            print(f"FREE CHANNELS ACTIVE — ch13 released. Model controls its own physics bit. f/k still injected.")
         for _ in range(steps_per_frame):
             grid, key = step_fn(grid, params, key)
-            # Re-inject spatial f/k after every NCA step so cells always read
-            # their local value, not whatever the NCA accidentally wrote to those channels
+            # Always keep f/k injected — life support
             grid = grid.at[:, :, CH_F].set(jf_field)
             grid = grid.at[:, :, CH_K].set(jk_field)
-            grid = grid.at[:, :, CH_PHYSICS].set(physics_bit)
+            # Only inject physics bit if not in free mode
+            if not release_physics:
+                grid = grid.at[:, :, CH_PHYSICS].set(physics_bit)
             step_count += 1
 
         # ── Spatial field phase drift ─────────────────────────────────────
@@ -546,6 +598,31 @@ def run():
                 print(f"  next sequence in {next_perturb - step_count} steps")
 
         # ── Saturation detection ──────────────────────────────────────────
+        # Free channel mode: drop small fresh GS patches at random positions.
+        # Keeps all accumulated hidden state intact — just sparks new activity.
+        if free_channels and step_count % SATURATION_CHECK == 0 and step_count >= FREE_WARMUP:
+            b_std = float(jnp.std(grid[:, :, CH_B]))
+            if b_std < SATURATION_STD:
+                patch_size = 16
+                n_patches  = np.random.randint(3, 7)
+                grid_np    = np.array(grid)
+                for _ in range(n_patches):
+                    py = np.random.randint(0, GRID_H - patch_size)
+                    px = np.random.randint(0, GRID_W - patch_size)
+                    A_patch = np.ones((patch_size, patch_size), dtype=np.float32)
+                    B_patch = np.zeros((patch_size, patch_size), dtype=np.float32)
+                    # Small random blob of B in the center of the patch
+                    cy, cx = patch_size // 2, patch_size // 2
+                    r = np.random.randint(3, 7)
+                    for dy in range(-r, r+1):
+                        for dx in range(-r, r+1):
+                            if dy*dy + dx*dx <= r*r:
+                                B_patch[cy+dy, cx+dx] = np.random.uniform(0.5, 1.0)
+                    grid_np[py:py+patch_size, px:px+patch_size, CH_A] = A_patch
+                    grid_np[py:py+patch_size, px:px+patch_size, CH_B] = B_patch
+                grid = jnp.array(grid_np)
+                print(f"Auto spark (free mode, std={b_std:.4f}) — {n_patches} patches dropped")
+
         # Only fires when the screen is truly solid — threshold lowered from
         # 0.02 to 0.005 so interesting dark/ghost-trace states are left alone.
         if not QUIET_MODE and step_count % SATURATION_CHECK == 0:
@@ -604,8 +681,9 @@ def run():
         render(screen, grid, blended_palette.astype(np.uint8).tolist(), render_mode, effect)
 
         palette_str = palette_names[palette_idx]
+        free_str = "  |  FREE-CH" if (free_channels and step_count >= FREE_WARMUP) else ""
         hud = font.render(
-            f"step {step_count}  |  bit={physics_bit:.0f}({'L' if physics_bit else 'G'})  f={f:.4f}±{FK_SPATIAL_AMP_F} k={k:.4f}±{FK_SPATIAL_AMP_K}  |  {palette_str}  |  {render_mode}+{effect}  |  spd={steps_per_frame}  |  T=physics A=sound M=mode E=effect P=palette F=poke X=extreme Z=chaos R=reset Q=quit",
+            f"step {step_count}  |  bit={physics_bit:.0f}({'L' if physics_bit else 'G'}){free_str}  f={f:.4f}±{FK_SPATIAL_AMP_F} k={k:.4f}±{FK_SPATIAL_AMP_K}  |  {palette_str}  |  {render_mode}+{effect}  |  spd={steps_per_frame}  |  T=physics A=sound M=mode E=effect P=palette F=poke X=extreme Z=chaos S=save L=load R=reset Q=quit",
             True, (80, 80, 80)
         )
         screen.blit(hud, (10, 10))

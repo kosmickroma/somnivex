@@ -26,14 +26,20 @@ from nca.model import(
     CH_A, CH_B, CH_F, CH_K,
     UpdateNet, make_perception_kernel, make_step_fn,
 )
+from nca.lenia import CH_PHYSICS
 from gs.engine import GS_REGIMES, gs_step, init_gs_grid
 from nca.params import PALETTES
 from display.windows import compute_heat, apply_palette_heat, apply_effect
 
 # ── Config ────────────────────────────────────────────────────────────────────
 CHECKPOINT = os.path.join(
-    os.path.dirname(__file__), 'checkpoints', 'params_050000.pkl'
+    os.path.dirname(__file__), 'checkpoints', 'lenia_050000.pkl'
 )
+
+# Physics bit — 0.0 = GS mode, 1.0 = Lenia mode.
+# The fused model absorbed both. Start at 0 (GS) where the interesting
+# pulsing ring behavior lives. Press T to flip live and watch the transition.
+PHYSICS_BIT = 0.0
 
 GRID_H          = 256
 GRID_W          = 256
@@ -78,8 +84,8 @@ PERTURB_INTERVAL_MIN = 1500  # min steps between sequences (~50s at 30fps)
 PERTURB_INTERVAL_MAX = 3600  # max steps between sequences (~2min at 30fps)
 PERTURB_POKES_MIN    = 3     # min pokes per sequence
 PERTURB_POKES_MAX    = 6     # max pokes per sequence
-PERTURB_SPACING_MIN  = 5     # min steps between pokes in a sequence
-PERTURB_SPACING_MAX  = 15    # max steps between pokes in a sequence
+PERTURB_SPACING_MIN  = 10    # min steps between pokes in a sequence
+PERTURB_SPACING_MAX  = 30    # max steps between pokes in a sequence
 
 EXTREME_INTERVAL_MIN = 4000  # min steps between autonomous extreme bursts (~2min)
 EXTREME_INTERVAL_MAX = 9000  # max steps between autonomous extreme bursts (~5min)
@@ -254,13 +260,15 @@ def run():
     step_fn           = make_step_fn(update_net, perception_kernel)
 
     # ── Starting regime ───────────────────────────────────────────────────
-    regime_names = list(GS_REGIMES.keys())
-    regime_idx   = np.random.randint(0, len(regime_names))
-    f, k         = GS_REGIMES[regime_names[regime_idx]]
+    regime_names  = list(GS_REGIMES.keys())
+    SEED_REGIMES  = ["chaos", "mitosis", "bacteria", "gliders", "uskate"]
+    seed_name     = np.random.choice(SEED_REGIMES)
+    regime_idx    = regime_names.index(seed_name)
+    f, k          = GS_REGIMES[seed_name]
 
     # ── Starting palette ──────────────────────────────────────────────────
     palette_names = list(PALETTES.keys())
-    palette_idx   = 0
+    palette_idx   = int(np.random.randint(0, len(palette_names)))
     palette       = PALETTES[palette_names[palette_idx]]
 
     # ── Init grid ─────────────────────────────────────────────────────────
@@ -286,6 +294,7 @@ def run():
     running         = True
     auto_nudges     = 0
     steps_per_frame = STEPS_PER_FRAME
+    physics_bit     = PHYSICS_BIT
 
     # Perturbation sequence state
     next_perturb    = np.random.randint(PERTURB_INTERVAL_MIN, PERTURB_INTERVAL_MAX)
@@ -345,29 +354,33 @@ def run():
                     running = False
 
                 if event.key == pygame.K_r:
-                    key, sk = random.split(key)
-                    print(f"Resetting (GS warmup)...")
-                    grid, key = init_nca_grid(sk, GRID_H, GRID_W, f, k)
+                    # Pick a fresh random regime so every reset looks different
+                    regime_idx   = np.random.randint(0, len(regime_names))
+                    f, k         = GS_REGIMES[regime_names[regime_idx]]
+                    key, sk      = random.split(key)
+                    print(f"Resetting → {regime_names[regime_idx]}  f={f:.4f} k={k:.4f}")
+                    grid, key    = init_nca_grid(sk, GRID_H, GRID_W, f, k)
                     f_field, k_field = make_fk_field(GRID_H, GRID_W, f, k, phase_fx, phase_fy, phase_kx, phase_ky)
-                    jf_field = jnp.array(f_field)
-                    jk_field = jnp.array(k_field)
-                    step_count  = 0
-                    auto_nudges = 0
+                    jf_field     = jnp.array(f_field)
+                    jk_field     = jnp.array(k_field)
+                    step_count   = 0
+                    auto_nudges  = 0
                     print(f"Reset done.")
 
                 if event.key == pygame.K_f:
-                    f = float(np.random.uniform(F_MIN, F_MAX))
-                    k = float(np.random.uniform(K_MIN, K_MAX))
+                    # Jump to a random named GS regime — dramatic, guaranteed diverse
+                    regime_idx = np.random.randint(0, len(regime_names))
+                    f, k       = GS_REGIMES[regime_names[regime_idx]]
                     f_field, k_field = make_fk_field(GRID_H, GRID_W, f, k, phase_fx, phase_fy, phase_kx, phase_ky)
-                    jf_field = jnp.array(f_field)
-                    jk_field = jnp.array(k_field)
-                    print(f"Manual poke → f_center={f:.4f}  k_center={k:.4f}")
+                    jf_field   = jnp.array(f_field)
+                    jk_field   = jnp.array(k_field)
+                    print(f"Regime jump → {regime_names[regime_idx]}  f={f:.4f} k={k:.4f}")
 
                 if event.key == pygame.K_p:
                     new_name       = pick_next_palette(palette_names[palette_idx], palette_names)
                     palette_idx    = palette_names.index(new_name)
                     palette_target = np.array(PALETTES[new_name], dtype=np.float32)
-                    palette_blend  = 0
+                    palette_blend  = 1
                     print(f"Palette: {new_name}")
 
                 if event.key == pygame.K_RIGHTBRACKET:
@@ -388,13 +401,27 @@ def run():
                     effect     = NCA_EFFECTS[effect_idx]
                     print(f"Effect: {effect}")
 
+                if event.key == pygame.K_t:
+                    physics_bit = 1.0 - physics_bit
+                    print(f"Physics bit → {physics_bit:.0f}  ({'Lenia' if physics_bit == 1.0 else 'GS'})")
+
                 if event.key == pygame.K_x:
                     pre_burst_f     = f
                     pre_burst_k     = k
-                    pokes_remaining = 4
+                    pokes_remaining = 6
                     next_poke       = step_count
                     extreme_mode    = True
                     print(f"EXTREME BURST fired (will restore f={f:.4f} k={k:.4f} after)")
+
+                if event.key == pygame.K_z:
+                    # Chaos injection — scramble hidden channels 2-13 directly.
+                    # F/X only change f/k (channels 14-15) which the attractor ignores.
+                    # This kicks the hidden state itself, forcing a new attractor search.
+                    noise = jnp.array(
+                        np.random.uniform(-0.5, 0.5, (GRID_H, GRID_W, 12)).astype(np.float32)
+                    )
+                    grid = grid.at[:, :, 2:14].add(noise)
+                    print("Z: hidden channel chaos injection")
 
         # ── NCA steps ─────────────────────────────────────────────────────
         for _ in range(steps_per_frame):
@@ -403,6 +430,7 @@ def run():
             # their local value, not whatever the NCA accidentally wrote to those channels
             grid = grid.at[:, :, CH_F].set(jf_field)
             grid = grid.at[:, :, CH_K].set(jk_field)
+            grid = grid.at[:, :, CH_PHYSICS].set(physics_bit)
             step_count += 1
 
         # ── Spatial field phase drift ─────────────────────────────────────
@@ -544,7 +572,7 @@ def run():
 
         palette_str = palette_names[palette_idx]
         hud = font.render(
-            f"step {step_count}  |  f={f:.4f}±{FK_SPATIAL_AMP_F} k={k:.4f}±{FK_SPATIAL_AMP_K}  |  {palette_str}  |  {render_mode}+{effect}  |  spd={steps_per_frame}  |  M=mode E=effect P=palette F=poke X=extreme R=reset Q=quit",
+            f"step {step_count}  |  bit={physics_bit:.0f}({'L' if physics_bit else 'G'})  f={f:.4f}±{FK_SPATIAL_AMP_F} k={k:.4f}±{FK_SPATIAL_AMP_K}  |  {palette_str}  |  {render_mode}+{effect}  |  spd={steps_per_frame}  |  T=physics M=mode E=effect P=palette F=poke X=extreme Z=chaos R=reset Q=quit",
             True, (80, 80, 80)
         )
         screen.blit(hud, (10, 10))

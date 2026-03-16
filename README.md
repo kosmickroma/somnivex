@@ -47,6 +47,14 @@ All images are unedited captures from the live simulation. No post-processing be
 
 ---
 
+**Three-population coexistence** — anti-creatures (black voids), discrete bright gliders, and a continuous background field all present simultaneously on the same grid. Confirmed via save-state analysis: the B channel histogram shows three distinct populations at the same step count. All three running at once, none interfering with the others' stability. Free channel mode, step 83495.
+
+| |
+|---|
+| ![](screenshots/free_ch_anti_orbital_a.png) |
+
+---
+
 **Synchronized blob arrays** — self-organized groups of structures maintaining coordinated spacing while drifting. Each blob on its own trajectory. The array holds formation without any explicit coordination — each cell only sees a 3×3 neighborhood.
 
 | | |
@@ -103,6 +111,8 @@ Behaviors observed that exist in neither training distribution:
 
 **Fog field** — slow dark ripples through a uniform medium. Emerges spontaneously after near-extinction events. The system self-recovers without resetting.
 
+**Three-population coexistence** — anti-creatures, discrete gliders, and continuous background field stable on the same grid simultaneously. Confirmed by save-state analysis of the B channel distribution: three distinct populations, none destabilizing the others.
+
 ---
 
 ## The Physics Bit is a Dial, Not a Switch
@@ -112,6 +122,16 @@ The behaviors above are not locked behind the Lenia physics mode. Lenia-mode beh
 Flipping the physics bit during a run (T key) at any step count can produce exotic global attractors — synchronized flocking, toroidal standing waves, anti-creatures — that are unreachable from a cold start. The hidden channel state accumulated during prior running becomes the launching pad. These states have been reproduced from as early as 3,000 steps with a single keypress.
 
 The hidden channels (ch2–12, 11 floats per cell that nobody assigned meaning to) appear to carry something that behaves like a physical potential field with multiple stable configurations — a landscape with many basins, some only accessible via specific paths through state space.
+
+---
+
+## The Dormant Half
+
+Analysis of saved grid states reveals something unexpected: in every free run observed so far, channels 2–12 (the 11 hidden channels) and channel 13 (the physics bit) remain exactly zero across all 65,536 cells for the entire run. The model defaults to writing zero to everything it controls.
+
+This means every behavior documented above — the anti-creatures, gliders, binary orbit, comet fission, three-population coexistence — is produced by **channels 0 and 1 only**. A and B. The same two channels Gray-Scott uses. The NCA's trained weights make those two channels behave in ways Gray-Scott never does, but the hidden state machinery has never been active in a free run.
+
+The Z key (chaos injection) forces non-zero values into ch2–12 temporarily. What happens when those 11 channels are fully loaded and allowed to run is unknown. The Lenia-trained half of the weight space — everything learned from Orbium — may only fire when the hidden channels carry state. It has never been properly activated.
 
 ---
 
@@ -221,6 +241,7 @@ python nca/run_free.py --gs
 3. The trail reabsorption behavior has no analog in either teacher. What rule produces it?
 4. What happens if we stop re-injecting the control channels entirely and let the model write to all 16 channels freely?
 5. Would training on 5–6 Lenia species generalize even deeper biological principles?
+6. Everything observed so far runs on zero hidden state — channels 2–12 are dormant. What does the model do when those channels are fully activated? The Lenia-trained weights may only express themselves when hidden state is present.
 
 ---
 

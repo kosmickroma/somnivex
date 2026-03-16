@@ -383,23 +383,26 @@ def run():
                     running = False
 
                 if event.key == pygame.K_s:
-                    save_path = os.path.join(
-                        os.path.dirname(__file__), 'saves',
-                        f'grid_{step_count:07d}.pkl'
-                    )
-                    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-                    save_data = {
-                        'grid': np.array(grid),
-                        'step_count': step_count,
-                        'f': f, 'k': k,
-                        'physics_bit': physics_bit,
-                        'free_channels': free_channels,
-                        'phase_fx': phase_fx, 'phase_fy': phase_fy,
-                        'phase_kx': phase_kx, 'phase_ky': phase_ky,
-                    }
-                    with open(save_path, 'wb') as fh:
-                        pickle.dump(save_data, fh)
-                    print(f"Saved → {save_path}")
+                    try:
+                        save_path = os.path.join(
+                            os.path.dirname(os.path.abspath(__file__)), 'saves',
+                            f'grid_{step_count:07d}.pkl'
+                        )
+                        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                        save_data = {
+                            'grid': np.array(grid),
+                            'step_count': step_count,
+                            'f': f, 'k': k,
+                            'physics_bit': physics_bit,
+                            'free_channels': free_channels,
+                            'phase_fx': phase_fx, 'phase_fy': phase_fy,
+                            'phase_kx': phase_kx, 'phase_ky': phase_ky,
+                        }
+                        with open(save_path, 'wb') as fh:
+                            pickle.dump(save_data, fh)
+                        print(f"Saved → {save_path}")
+                    except Exception as e:
+                        print(f"Save FAILED: {e}")
 
                 if event.key == pygame.K_l:
                     import glob

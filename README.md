@@ -28,6 +28,27 @@ The creature is not chasing the rings. It moves through a chemical gradient of i
 
 ---
 
+## v2 — Wound Healing & Attractor Seeds (2026-03-17)
+
+A Near Extinction seed (left click after pressing V) writes A=0.99, B=0.00 into a 96×96 region — a chemically dead rectangle. The NCA treats this as a wound and immediately begins reacting at the boundary. What follows is not what anyone expected.
+
+The rectangle border stabilizes into a sharp glowing wave front — ch4 concentrates at the edge exactly as it does at natural blob boundaries. The dead zone holds its shape. Living chemistry surrounds it. Then the boundary begins to evolve: straight edges develop curvature, corners grow appendages, the rectangle sprouts tendrils and siphons energy from nearby structures. Over thousands of steps it morphs from a geometric stamp into an organic creature, while the NCA tries to "heal" the wound according to its learned physics.
+
+**Data from 79,000-step interactive run:** Near Extinction seeds from Predator Invasion state → Rich Ecosystem within 200 steps, 9 of 9 times. The dead zone interrupts the dominant blob chemistry, forcing a reorganization at the boundary. Stacking multiple seeds → Chaos → Stable reset sequence. This is the most reliable state control discovered.
+
+Steps 28005 → 28980 → 29315 → 29595 → 29855 → 30935 (Near Extinction seeds placed, boundary evolving):
+
+| | | |
+|---|---|---|
+| ![](screenshots/v2_seed_rectangle_birth.png) | ![](screenshots/v2_seed_rectangle_glowing.png) | ![](screenshots/v2_seed_rectangle_pointing.png) |
+| ![](screenshots/v2_seed_creature_appendages.png) | ![](screenshots/v2_seed_labyrinth_creature.png) | |
+
+**Left:** Seed rectangle born mid-Predator Invasion — clean geometric structure coexisting with crescent gliders. **Center:** Rectangle develops double border (ch4 edge signal), ring solitons form below it, organic gliders orbit around it. **Right:** Rectangle opens into bracket/U shape as boundary waves propagate. **Bottom left:** Boundary fully organic — creature with body and appendages, recognizable animal morphology emerging from a square stamp. **Bottom center:** Full labyrinthine creature at peak complexity — the rectangle is gone, replaced by a connected maze organism filling half the grid.
+
+This is the lizard paper in real time. The model learned to grow toward a target. When you stamp a dead zone, you give it a wound. It heals the wound using the same learned rules — and the healing produces structures the model has never explicitly been trained to make.
+
+---
+
 ## Gallery
 
 All images are unedited captures from the live simulation. No post-processing beyond the in-engine palette and render mode.
@@ -331,7 +352,7 @@ These jump to specific f/k parameter sets. Their effect in this fused model diff
 2. **Are there conserved quantities?** ch2 and ch4 carry independent spatial information that persists over 100k+ steps. Is there a quantity that's preserved across the predator/prey cycle? Conservation laws are how new physics gets identified.
 3. **Why do ch3 and ch6–12 stay dead?** The model has 11 hidden channels and activates 2. Is this a capacity limitation, a training artifact, or did the model find that 2 is sufficient and stop?
 4. **Is the behavioral grammar universal?** We have 8 states and a transition matrix for this model. Apply the same clustering method to a GS-only run, a Lenia-only run, a different NCA architecture. Do the grammars share structure? Shared grammar = shared deep physics.
-5. **Can the state space be steered?** *(in progress — C key)* The delta between cluster centroids is a direction in feature space. The C key now computes this delta and injects a directional hidden channel pattern toward the chosen cluster centroid. Each press cycles the target: Rich Ecosystem → Stable → Predator Invasion → Near Extinction → Zombie. This is the surgical version of H.
+5. **Can the state space be steered?** *(confirmed — Near Extinction seed)* Stamping a dead zone (click → Near Extinction seed) breaks Predator Invasion and forces Rich Ecosystem reorganization — 9/9 confirmed. The C key provides directional hidden channel nudges; the seed provides a spatial wound the model must heal. Both are forms of control. The wound healing approach is more reliable because it writes to the visible chemistry (A/B channels), not just hidden state metadata.
 6. **What is the creature actually doing to the rings?** The data shows rings entering the creature's body and exiting. The blob count fluctuates but doesn't drop to zero. Are the rings preserved topologically through the passage, or are they dissolved and reconstructed? Save-state analysis of ring identity across frames would answer this.
 
 ---

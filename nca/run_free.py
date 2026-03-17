@@ -423,13 +423,19 @@ def run():
     #   ch4_amp   — noise amplitude for ch4 (0 = skip)
     #   ch4_ring  — if True, concentrate ch4 in a ring (border) instead of fill
     #   zero_out  — if True, zero all hidden channels in the region (death seed)
-    SEED_RADIUS = 20   # half-size of the stamp region in grid cells
+    SEED_RADIUS = 48   # half-size of stamp region — needs ~10% of grid to compete with attractor
     SEED_STATES = [4, 1, 5, 3]   # Rich, Stable, Predator, Near Extinction
+    # Each seed writes to the VISIBLE chemistry (A, B) AND hidden channels.
+    # Hidden-only injection gets swamped in a few steps — need to set the actual chemistry.
+    # a_val/b_val: fixed values to write into A/B in the region (None = don't touch)
+    # ch2_amp/ch4_amp: noise amplitude for hidden channels (0 = skip)
+    # ch4_ring: concentrate ch4 in border ring (Rich Ecosystem signature)
+    # zero_out: zero all hidden channels (Near Extinction signature)
     SEED_PARAMS = {
-        4: dict(ch2_amp=0.04, ch4_amp=0.0,  ch4_ring=True,  zero_out=False),  # Rich: ch4 at border
-        1: dict(ch2_amp=0.02, ch4_amp=0.02, ch4_ring=False, zero_out=False),  # Stable: moderate both
-        5: dict(ch2_amp=0.12, ch4_amp=0.12, ch4_ring=False, zero_out=False),  # Predator: maxed both
-        3: dict(ch2_amp=0.0,  ch4_amp=0.0,  ch4_ring=False, zero_out=True),   # Near Extinction: death
+        4: dict(a_val=0.50, b_val=0.25, ch2_amp=0.04, ch4_amp=0.0, ch4_ring=True,  zero_out=False),  # Rich
+        1: dict(a_val=0.85, b_val=0.10, ch2_amp=0.02, ch4_amp=0.02, ch4_ring=False, zero_out=False),  # Stable
+        5: dict(a_val=0.30, b_val=0.40, ch2_amp=0.15, ch4_amp=0.15, ch4_ring=False, zero_out=False),  # Predator
+        3: dict(a_val=0.99, b_val=0.00, ch2_amp=0.0,  ch4_amp=0.0,  ch4_ring=False, zero_out=True),   # Near Extinction
     }
     SEED_LABELS = {4:'Rich Ecosystem', 1:'Stable Ecosystem', 5:'Predator Invasion', 3:'Near Extinction'}
     _seed_state_idx = 0   # index into SEED_STATES
@@ -720,6 +726,13 @@ def run():
                 y0, y1 = max(0, gy - r), min(GRID_H, gy + r)
                 x0, x1 = max(0, gx - r), min(GRID_W, gx + r)
                 h, w   = y1 - y0, x1 - x0
+                # Write visible chemistry (A and B) — this is the key part.
+                # Hidden-channel-only injection gets swamped in a few steps.
+                # Writing A/B sets the actual reaction state the NCA evolves from.
+                if _sp['a_val'] is not None:
+                    grid = grid.at[y0:y1, x0:x1, 0].set(_sp['a_val'])
+                if _sp['b_val'] is not None:
+                    grid = grid.at[y0:y1, x0:x1, 1].set(_sp['b_val'])
                 if _sp['zero_out']:
                     # Death seed — kill all hidden channels in region
                     grid = grid.at[y0:y1, x0:x1, 2:13].set(0.0)
@@ -731,11 +744,11 @@ def run():
                         if _sp['ch4_ring']:
                             # Concentrate ch4 in a ring around the border of the region
                             _n4 = np.zeros((h, w), dtype=np.float32)
-                            ring = 4  # ring width in cells
-                            _n4[:ring,  :]    = _sp['ch4_amp'] * 3.0
-                            _n4[-ring:, :]    = _sp['ch4_amp'] * 3.0
-                            _n4[:,  :ring]    = _sp['ch4_amp'] * 3.0
-                            _n4[:, -ring:]    = _sp['ch4_amp'] * 3.0
+                            ring = 6
+                            _n4[:ring,  :]  = _sp['ch4_amp'] * 3.0
+                            _n4[-ring:, :]  = _sp['ch4_amp'] * 3.0
+                            _n4[:,  :ring]  = _sp['ch4_amp'] * 3.0
+                            _n4[:, -ring:]  = _sp['ch4_amp'] * 3.0
                         else:
                             _n4 = np.random.normal(0, _sp['ch4_amp'], (h, w)).astype(np.float32)
                         grid = grid.at[y0:y1, x0:x1, 4].add(jnp.array(_n4))

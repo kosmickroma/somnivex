@@ -253,12 +253,34 @@ def load_checkpoint(path):
     return jax.device_put(params)
 
 
+def find_latest_checkpoint(checkpoint_dir, prefix='lenia_'):
+    """Return (path, step) of the most recently written lenia_XXXXXX.pkl, or (None, 0)."""
+    import glob as _glob
+    files = _glob.glob(os.path.join(checkpoint_dir, f'{prefix}??????.pkl'))
+    if not files:
+        return None, 0
+    def step_of(p):
+        try:
+            return int(os.path.basename(p).replace(prefix, '').replace('.pkl', ''))
+        except ValueError:
+            return 0
+    # Sort by mtime — the most recently written file is the true latest checkpoint
+    files.sort(key=os.path.getmtime)
+    latest = files[-1]
+    return latest, step_of(latest)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def train():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--resume', action='store_true',
+                        help='Resume from the latest lenia_XXXXXX.pkl checkpoint')
+    args = parser.parse_args()
+
     print("=" * 60)
     print(" Somnivex — v2 Training: 3 Species + Continuous ch13 + Hidden Noise")
-    print(" Fine-tuning from fused lenia_050000 checkpoint")
     print("=" * 60)
     print(f"\n JAX: {jax.devices()}")
     print(f" Grid: {TRAIN_H}x{TRAIN_W}  Pool: {POOL_SIZE}  Batch: {BATCH_SIZE}")
@@ -274,13 +296,24 @@ def train():
     dummy = jnp.zeros((TRAIN_H, TRAIN_W, N_CHANNELS * N_FILTERS))
     params = update_net.init(subkey, dummy)
 
-    if not os.path.exists(LENIA_CHECKPOINT):
-        print(f"ERROR: Fused checkpoint not found: {LENIA_CHECKPOINT}")
-        print("Expected lenia_050000.pkl from v1 training.")
-        sys.exit(1)
-    params = load_checkpoint(LENIA_CHECKPOINT)
+    if args.resume:
+        resume_path, start_step = find_latest_checkpoint(CHECKPOINT_DIR)
+        if resume_path is None:
+            print("ERROR: --resume specified but no lenia_XXXXXX.pkl found in checkpoints/")
+            sys.exit(1)
+        params = load_checkpoint(resume_path)
+        print(f" RESUMING from: {resume_path}  (step {start_step} → {TRAIN_STEPS})")
+    else:
+        start_step = 0
+        if not os.path.exists(LENIA_CHECKPOINT):
+            print(f"ERROR: Fused checkpoint not found: {LENIA_CHECKPOINT}")
+            print("Expected lenia_050000.pkl from v1 training.")
+            sys.exit(1)
+        params = load_checkpoint(LENIA_CHECKPOINT)
+        print(f" Loaded: {LENIA_CHECKPOINT}")
+
     n_params = sum(x.size for x in jax.tree_util.tree_leaves(params))
-    print(f" Loaded: {LENIA_CHECKPOINT}  ({n_params:,} params)\n")
+    print(f" Params: {n_params:,}\n")
 
     optimizer = optax.chain(
         optax.clip_by_global_norm(1.0),
@@ -313,7 +346,7 @@ def train():
 
     t_start = time.time()
 
-    for step in range(TRAIN_STEPS):
+    for step in range(start_step, TRAIN_STEPS):
         n_lenia = get_n_lenia(step)
         n_gs    = BATCH_SIZE - n_lenia
 

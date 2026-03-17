@@ -95,6 +95,106 @@ Everything we're building with NCA sits on top of this foundation.
 
 ---
 
+---
+
+## 6. Society of Mind
+**Marvin Minsky, 1986 (book — read the summary/overview, not the whole thing)**
+**Search:** "Minsky Society of Mind summary" — there are good 20-minute essay summaries online
+
+The foundational theory that intelligence emerges from a society of individually stupid agents.
+No single agent understands anything. Intelligence is what the colony produces collectively.
+Minsky wrote this before neural networks took off — it reads like a prophecy now.
+
+**Why it matters:** This is the theoretical foundation for exactly what you're building.
+Each NCA cell is a "society of mind" agent. None of them is intelligent. The swarm is.
+Minsky even has a section on how attention and priority work — which cells/agents
+"win" at any given moment. That's your urgency routing.
+
+---
+
+## 7. Amorphous Computing
+**Abelson, Knight, Sussman — MIT, 1999**
+**Search:** "Amorphous Computing Abelson Knight Sussman MIT"
+**Available free:** MIT website / citeseer
+
+Proposed computing with huge numbers of identical locally-communicating particles
+with no addresses, no central control, no routing tables. Global behavior emerges
+from local rules. They had the theory completely right but no training method.
+They were doing this with hand-programmed rules 25 years ago.
+
+**Why it matters:** This is the academic ancestor of NCA-based distributed computing.
+They solved the theory. You now have the training method they didn't.
+Read this and you'll see your NCA idea has deep roots — you're not the first to
+think it, you're one of the first who can actually build it.
+
+---
+
+## 8. Reservoir Computing / Echo State Networks
+**Jaeger, 2001 / Maass et al. 2002**
+**Search:** "Echo State Networks Jaeger 2001" and "Liquid State Machines Maass 2002"
+**Available free:** arxiv / scholarpedia
+
+Uses the chaotic dynamics of a fixed recurrent network as a computational substrate.
+You don't train the reservoir — you train a small readout layer on top of it.
+The reservoir's rich dynamics encode inputs in its state; the readout decodes answers.
+This is relevant because your NCA's hidden channels might ALREADY be a reservoir —
+encoding history and world state in the ch2-12 dynamics even when you haven't
+explicitly trained them to.
+
+**Why it matters:** Might be a fast path. Instead of retraining the NCA to do tasks,
+add a trained readout layer on top of the existing hidden channels and see what
+information is already in there. The NCA as reservoir, LLM or small net as readout.
+
+---
+
+## 9. ASAL — Automated Search for Artificial Life
+**Search:** "ASAL Automated Search for Artificial Life 2024"
+**Available free:** arxiv 2024
+
+Uses a Vision-Language Model (VLM) as a fitness evaluator to automatically search
+for interesting cellular automaton rules. The VLM looks at CA outputs and scores
+how "interesting" they are — replacing the human in the loop for ALife exploration.
+Most directly related to using foundation models to evaluate and steer NCA behavior.
+
+**Why it matters:** Closest published work to using AI to understand and navigate NCA
+behavior. They're doing it offline/batch. Real-time orchestration is the next step.
+
+---
+
+## 10. Sensorimotor Lenia — Discovering Agency in Cellular Automata
+**Inria / Flowers Team, 2024**
+**Search:** "Discovering Sensorimotor Agency in Cellular Automata Inria 2024"
+**Available free:** science.org/doi/10.1126/sciadv.adp0834
+**Repo:** github.com/flowersteam/sensorimotor-lenia-search
+
+Finds CA configurations that exhibit sensorimotor agency — cells that respond
+to their environment in ways that look like intentional behavior. Uses quality-diversity
+search (MAP-Elites) to map the space of possible behaviors. Directly relevant to
+the question: which NCA configurations have "agent-like" properties?
+
+**Why it matters:** This is the systematic version of what you've been doing manually
+(pressing T, X, Z and seeing what happens). They automated the exploration.
+
+---
+
+## 11. Global Workspace Theory
+**Baars 1988, Dehaene et al. 2001**
+**Search:** "Global Workspace Theory Dehaene consciousness" — read a summary, not the original
+**Good intro:** search "global workspace theory explained" — many good YouTube explainers
+
+Theory of how the brain coordinates competing processes: specialized modules
+run in parallel (vision, language, memory, emotion) and compete for access to a
+"global workspace" — a shared broadcast channel. Whatever wins the competition
+gets broadcast to all other modules. This IS your urgency/prioritization mechanism
+described as neuroscience.
+
+**Why it matters:** Your NCA swarm idea is a computational implementation of Global
+Workspace Theory. The NCA grid IS the global workspace. Different regions are the
+specialized modules. The urgency signal is the competition mechanism. You're
+reinventing a Nobel-adjacent theory of consciousness. Worth knowing.
+
+---
+
 ## The through-line across all of these
 
 Every single paper above is attacking the same problem from a different angle:

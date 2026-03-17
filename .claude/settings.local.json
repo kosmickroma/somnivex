@@ -60,7 +60,8 @@
       "WebFetch(domain:content.wolfram.com)",
       "Bash(cp:*)",
       "Bash(gh api:*)",
-      "Bash(source:*)"
+      "Bash(source:*)",
+      "Bash(ls -t /home/kk/projects/ml/somnivex/nca/saves/*.pkl)"
     ]
   }
 }

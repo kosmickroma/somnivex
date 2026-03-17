@@ -10,6 +10,7 @@ build/
 # Private notes and dev todos
 notes/
 kktodo*.md
+mycelium/
 
 # Runtime files — personal data, not for repo
 ratings_log.json
@@ -33,6 +34,15 @@ media/
 
 # Gallery saved pieces (user-specific)
 gallery/pieces/
+
+# NCA checkpoints — large binary files, stored separately
+nca/checkpoints/*.pkl
+# Keep the classifier — it's a project artifact, not a runtime output
+!nca/state_classifier.pkl
+
+# Runtime logs and saves — generated per-run, not for repo
+nca/logs/
+nca/saves/
 
 # JAX / XLA cache
 .jax_cache/

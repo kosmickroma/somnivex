@@ -298,20 +298,27 @@ python nca/run_free.py --gs
 
 These jump to specific f/k parameter sets. Their effect in this fused model differs from standard Gray-Scott — the names are from the original GS literature but the actual behaviors are model-specific.
 
-| Key | Regime | f / k | Observed tendency in fused model |
-|-----|--------|-------|----------------------------------|
-| `1` | spirals | 0.012 / 0.045 | Destabilizing — 50% → Chaos/Init |
-| `2` | chaos | 0.020 / 0.045 | Destabilizing — 50% → Chaos/Init |
-| `3` | waves | 0.014 / 0.047 | Mixed — Heat Death risk |
-| `4` | worms | 0.026 / 0.055 | **Predator trigger** — 42% → Predator Invasion |
-| `5` | mitosis | 0.030 / 0.063 | Gentle stabilizer — 47% → Stable Ecosystem |
-| `6` | gliders | 0.034 / 0.063 | **Strongest stabilizer** — 63% → Stable Ecosystem |
-| `7` | bacteria | 0.046 / 0.065 | Stabilizing — Near Extinction risk at low ch4 |
-| `8` | maze | 0.029 / 0.057 | Near Extinction risk — 42% → Near Extinction |
-| `9` | stripes | 0.050 / 0.063 | Mixed — destabilizes existing structures |
-| `0` | uskate | 0.010 / 0.047 | Mostly stabilizing, occasional Rich Ecosystem |
+**Primary controls (most useful in practice):**
 
-*Tendencies measured from intervention logs — not deterministic, depend on hidden channel state at time of press.*
+| Key | Regime | f / k | Role | Observed tendency |
+|-----|--------|-------|------|-------------------|
+| `1` | mitosis | 0.030 / 0.063 | **Stabilizer** | Stable 36%, Rich 27% — reliable calm-down key |
+| `2` | gliders | 0.034 / 0.063 | **Stabilizer** | Stable 89% — most reliable, glider-friendly |
+| `3` | maze | 0.029 / 0.057 | **Predator trigger** | Context-dependent — pushes toward Predator Invasion |
+| `0` | uskate | 0.010 / 0.047 | **Chaos escape** | Breaks locked states, brief chaos then recoverable |
+
+**Secondary / exploratory:**
+
+| Key | Regime | f / k | Observed tendency |
+|-----|--------|-------|-------------------|
+| `4` | worms | 0.026 / 0.055 | Predator trigger from Stable (50%) |
+| `7` | bacteria | 0.046 / 0.065 | Strong stabilizer — Stable 61%, Rich 39% |
+| `9` | stripes | 0.050 / 0.063 | Rich Ecosystem nudge — Stable→Rich 60% |
+| `1` | spirals | 0.012 / 0.045 | Destabilizing |
+| `2` | chaos | 0.020 / 0.045 | Heat Death risk — use carefully |
+| `3` | waves | 0.014 / 0.047 | Heat Death risk — use carefully |
+
+*Tendencies measured from 1,300+ intervention log entries. Not deterministic — hidden channel state at time of press changes the outcome. The same key from different macro-states produces different results.*
 
 ---
 

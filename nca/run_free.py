@@ -574,18 +574,20 @@ def run():
                     jk_field   = jnp.array(k_field)
                     print(f"Regime jump → {regime_names[regime_idx]}  f={f:.4f} k={k:.4f}")
 
-                # Number keys 1-9 for direct named regime selection
+                # Number keys — organized by function based on empirical testing
+                # 5/6 = stabilizers, 8 = predator trigger, 0 = chaos escape
+                # Others kept for exploration but less reliable
                 _num_keys = {
-                    pygame.K_1: 'spirals',
-                    pygame.K_2: 'chaos',
-                    pygame.K_3: 'waves',
+                    pygame.K_1: 'mitosis',   # stable/rich
+                    pygame.K_2: 'gliders',   # stable, glider-friendly
+                    pygame.K_3: 'maze',      # predator trigger
                     pygame.K_4: 'worms',
-                    pygame.K_5: 'mitosis',
-                    pygame.K_6: 'gliders',
+                    pygame.K_5: 'spirals',
+                    pygame.K_6: 'chaos',
                     pygame.K_7: 'bacteria',
-                    pygame.K_8: 'maze',
+                    pygame.K_8: 'waves',
                     pygame.K_9: 'stripes',
-                    pygame.K_0: 'uskate',
+                    pygame.K_0: 'uskate',    # chaos escape
                 }
                 if event.key in _num_keys:
                     _rname = _num_keys[event.key]

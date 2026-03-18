@@ -37,6 +37,9 @@ gallery/pieces/
 
 # NCA checkpoints — large binary files, stored separately
 nca/checkpoints/*.pkl
+
+# Training data — large binary files, not for repo
+nca/*.npz
 # Keep the classifier — it's a project artifact, not a runtime output
 !nca/state_classifier.pkl
 

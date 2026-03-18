@@ -52,6 +52,10 @@ LOG_EVERY        = 100
 
 CHECKPOINT_DIR = os.path.join(os.path.dirname(__file__), 'checkpoints')
 LENIA_CHECKPOINT = os.path.join(CHECKPOINT_DIR, 'lenia_050000.pkl')  # start from fused checkpoint
+PHYSARUM_DATA_PATH = os.path.join(os.path.dirname(__file__), 'physarum_training_data.npz')
+
+# Number of Physarum samples per batch when --physarum is active (taken from GS allocation)
+PHYSARUM_N = 4
 
 # Sample ch13 uniformly from [0, 1] during training instead of hard 0/1.
 # Teaches the model the full interpolation spectrum between GS and Lenia.
@@ -184,6 +188,24 @@ def make_gs_loss_fn(update_net, perception_kernel):
     return gs_loss_fn
 
 
+def make_physarum_loss_fn(update_net, perception_kernel):
+    """
+    Physarum loss: NCA must predict the next trail concentration frame on channel 0.
+    Uses pre-computed (frame_t, frame_t+1) pairs from physarum_training_data.npz.
+    Re-injects CH_PHYSICS=0.5 after step. Loss = MSE on ch0 only.
+    ch13=0.5 puts Physarum exactly between GS (0.0) and Lenia (1.0).
+    """
+    @jax.jit
+    def physarum_loss_fn(params, batch_grids, batch_targets, batch_keys):
+        def step_one(grid, key):
+            return nca_step(grid, params, update_net, perception_kernel, key)
+        nca_grids, _ = jax.vmap(step_one)(batch_grids, batch_keys)
+        nca_grids = nca_grids.at[:, :, :, CH_PHYSICS].set(0.5)
+        loss = jnp.mean((nca_grids[:, :, :, CH_A] - batch_targets) ** 2)
+        return loss, ()
+    return physarum_loss_fn
+
+
 def make_lenia_loss_fn(update_net, perception_kernel, lenia_targets_batch_fn):
     """
     Lenia loss: NCA must track Lenia trajectory on channel 0.
@@ -239,9 +261,9 @@ def make_nca_batch_step(update_net, perception_kernel):
 
 # ── Checkpointing ─────────────────────────────────────────────────────────────
 
-def save_checkpoint(params, step):
+def save_checkpoint(params, step, prefix='lenia'):
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
-    path = os.path.join(CHECKPOINT_DIR, f'lenia_{step:06d}.pkl')
+    path = os.path.join(CHECKPOINT_DIR, f'{prefix}_{step:06d}.pkl')
     with open(path, 'wb') as f:
         pickle.dump(jax.device_get(params), f)
     print(f"  Saved: {path}")
@@ -277,10 +299,34 @@ def train():
     parser = argparse.ArgumentParser()
     parser.add_argument('--resume', action='store_true',
                         help='Resume from the latest lenia_XXXXXX.pkl checkpoint')
+    parser.add_argument('--gs-only', action='store_true',
+                        help='GS-only training: same setup as v2 but no Lenia teacher. '
+                             'Starts from params_050000.pkl, saves to gs_only_XXXXXX.pkl. '
+                             'Use to test whether the 8-state grammar requires multi-physics fusion.')
+    parser.add_argument('--physarum', action='store_true',
+                        help='Add Physarum as a teacher. Requires nca/physarum_training_data.npz. '
+                             'With --gs-only: GS+Physarum grammar experiment (saves physarum_XXXXXX.pkl). '
+                             'Without --gs-only: v3 three-teacher model (saves v3_XXXXXX.pkl).')
     args = parser.parse_args()
 
+    gs_only  = args.gs_only
+    physarum = args.physarum
+
+    # In gs-only mode, force ch13=0.0 for GS pool states (no continuous interpolation).
+    # Physarum will be at ch13=0.5 — we want clean separation, not 0.0-0.3 vs 0.5.
+    global CH13_CONTINUOUS
+    if gs_only:
+        CH13_CONTINUOUS = False
+
     print("=" * 60)
-    print(" Somnivex — v2 Training: 3 Species + Continuous ch13 + Hidden Noise")
+    if gs_only and physarum:
+        print(" Somnivex — GS+Physarum Grammar Experiment: No Lenia")
+    elif gs_only:
+        print(" Somnivex — GS-Only Training: Hidden Channel Noise, No Lenia")
+    elif physarum:
+        print(" Somnivex — v3 Training: GS + Lenia + Physarum (3 teachers)")
+    else:
+        print(" Somnivex — v2 Training: 3 Species + Continuous ch13 + Hidden Noise")
     print("=" * 60)
     print(f"\n JAX: {jax.devices()}")
     print(f" Grid: {TRAIN_H}x{TRAIN_W}  Pool: {POOL_SIZE}  Batch: {BATCH_SIZE}")
@@ -296,13 +342,30 @@ def train():
     dummy = jnp.zeros((TRAIN_H, TRAIN_W, N_CHANNELS * N_FILTERS))
     params = update_net.init(subkey, dummy)
 
+    GS_ONLY_START = os.path.join(CHECKPOINT_DIR, 'params_050000.pkl')
+    if gs_only and physarum:
+        ckpt_prefix = 'physarum'
+    elif gs_only:
+        ckpt_prefix = 'gs_only'
+    elif physarum:
+        ckpt_prefix = 'v3'
+    else:
+        ckpt_prefix = 'lenia'
+
     if args.resume:
-        resume_path, start_step = find_latest_checkpoint(CHECKPOINT_DIR)
+        resume_path, start_step = find_latest_checkpoint(CHECKPOINT_DIR, prefix=ckpt_prefix + '_')
         if resume_path is None:
-            print("ERROR: --resume specified but no lenia_XXXXXX.pkl found in checkpoints/")
+            print(f"ERROR: --resume specified but no {ckpt_prefix}_XXXXXX.pkl found in checkpoints/")
             sys.exit(1)
         params = load_checkpoint(resume_path)
         print(f" RESUMING from: {resume_path}  (step {start_step} → {TRAIN_STEPS})")
+    elif gs_only:
+        start_step = 0
+        if not os.path.exists(GS_ONLY_START):
+            print(f"ERROR: GS-only start checkpoint not found: {GS_ONLY_START}")
+            sys.exit(1)
+        params = load_checkpoint(GS_ONLY_START)
+        print(f" Loaded: {GS_ONLY_START}  [GS-only experiment]")
     else:
         start_step = 0
         if not os.path.exists(LENIA_CHECKPOINT):
@@ -325,12 +388,25 @@ def train():
     fK_np  = make_kernel_fft(LENIA_R, TRAIN_H, TRAIN_W)
     fK_jax = jnp.array(fK_np)
 
+    # ── Load Physarum training data ────────────────────────────────────────
+    if physarum:
+        if not os.path.exists(PHYSARUM_DATA_PATH):
+            print(f"ERROR: Physarum training data not found: {PHYSARUM_DATA_PATH}")
+            print("Run: python kktodo/physarum_typing/03_generate_training_data.py")
+            sys.exit(1)
+        _phys_data = np.load(PHYSARUM_DATA_PATH)
+        physarum_frames = _phys_data['frames']   # (N, H, W) float32
+        physarum_max_idx = len(physarum_frames) - 1
+        print(f" Physarum data: {len(physarum_frames)} frames  ({physarum_max_idx} pairs)")
+
     # ── Compile functions ─────────────────────────────────────────────────
     lenia_targets_batch_fn = make_lenia_target_fn(fK_jax)
     gs_loss_fn             = make_gs_loss_fn(update_net, perception_kernel)
     lenia_loss_fn          = make_lenia_loss_fn(update_net, perception_kernel, lenia_targets_batch_fn)
+    physarum_loss_fn       = make_physarum_loss_fn(update_net, perception_kernel) if physarum else None
     gs_loss_and_grad       = jax.value_and_grad(gs_loss_fn,     has_aux=True)
     lenia_loss_and_grad    = jax.value_and_grad(lenia_loss_fn,  has_aux=True)
+    physarum_loss_and_grad = jax.value_and_grad(physarum_loss_fn, argnums=0, has_aux=True) if physarum else None
     nca_batch_step         = make_nca_batch_step(update_net, perception_kernel)
 
     # ── Init pools ────────────────────────────────────────────────────────
@@ -339,78 +415,97 @@ def train():
     lenia_pool, fK_np   = init_lenia_pool(POOL_SIZE, TRAIN_H, TRAIN_W)
     lenia_rng           = np.random.default_rng(seed=99)
 
-    print(f" Training {TRAIN_STEPS} steps with ratio schedule:")
-    for thresh, n in LENIA_SCHEDULE:
-        print(f"  step {thresh:5d}+: {n}/{BATCH_SIZE} Lenia = {n/BATCH_SIZE*100:.0f}%")
+    if gs_only:
+        print(f" Training {TRAIN_STEPS} steps — GS only, no Lenia teacher")
+    else:
+        print(f" Training {TRAIN_STEPS} steps with ratio schedule:")
+        for thresh, n in LENIA_SCHEDULE:
+            print(f"  step {thresh:5d}+: {n}/{BATCH_SIZE} Lenia = {n/BATCH_SIZE*100:.0f}%")
     print()
 
     t_start = time.time()
 
     for step in range(start_step, TRAIN_STEPS):
-        n_lenia = get_n_lenia(step)
-        n_gs    = BATCH_SIZE - n_lenia
+        n_physarum = PHYSARUM_N if physarum else 0
+        n_lenia    = 0 if gs_only else get_n_lenia(step)
+        n_gs       = BATCH_SIZE - n_lenia - n_physarum
 
-        # Sample from each pool
-        gs_idx    = np.random.choice(POOL_SIZE, n_gs,    replace=False)
-        lenia_idx = np.random.choice(POOL_SIZE, n_lenia, replace=False)
+        # Sample from GS pool
+        gs_idx   = np.random.choice(POOL_SIZE, n_gs, replace=False)
+        gs_batch = jnp.array(gs_pool[gs_idx])
+        key, *gs_key_list = random.split(key, n_gs + 1)
+        gs_keys  = jnp.stack(gs_key_list)
 
-        gs_batch    = jnp.array(gs_pool[gs_idx])
-        lenia_batch = jnp.array(lenia_pool[lenia_idx])
-
-        key, *gs_key_list    = random.split(key, n_gs    + 1)
-        key, *lenia_key_list = random.split(key, n_lenia + 1)
-        gs_keys    = jnp.stack(gs_key_list)
-        lenia_keys = jnp.stack(lenia_key_list)
-
-        # ── Forward + backward for each physics ───────────────────────────
-        # Two separate backward passes. Gradients are summed below.
-        # This is mathematically equivalent to one combined loss pass,
-        # but avoids dynamic batch size issues with JAX's JIT.
         (gs_loss, (gs_pred, gs_persist)), gs_grads = gs_loss_and_grad(
             params, gs_batch, gs_keys
         )
-        (lenia_loss, _), lenia_grads = lenia_loss_and_grad(
-            params, lenia_batch, lenia_keys
-        )
 
-        # Sum gradients — each already reflects its batch size
-        combined_grads = jax.tree_util.tree_map(
-            lambda g, l: g + l,
-            gs_grads, lenia_grads
-        )
+        if gs_only:
+            combined_grads = gs_grads
+            lenia_loss = 0.0
+        else:
+            lenia_idx   = np.random.choice(POOL_SIZE, n_lenia, replace=False)
+            lenia_batch = jnp.array(lenia_pool[lenia_idx])
+            key, *lenia_key_list = random.split(key, n_lenia + 1)
+            lenia_keys  = jnp.stack(lenia_key_list)
+            (lenia_loss, _), lenia_grads = lenia_loss_and_grad(
+                params, lenia_batch, lenia_keys
+            )
+            combined_grads = jax.tree_util.tree_map(
+                lambda g, l: g + l,
+                gs_grads, lenia_grads
+            )
+
+        physarum_loss = 0.0
+        if physarum:
+            phys_idx     = np.random.choice(physarum_max_idx, n_physarum, replace=False)
+            phys_grids   = np.zeros((n_physarum, TRAIN_H, TRAIN_W, N_CHANNELS), dtype=np.float32)
+            phys_grids[:, :, :, CH_A]       = physarum_frames[phys_idx]
+            phys_grids[:, :, :, CH_PHYSICS] = 0.5
+            phys_grids[:, :, :, 2:13]       = np.random.normal(
+                0.0, HIDDEN_INIT_NOISE, (n_physarum, TRAIN_H, TRAIN_W, 11)
+            ).astype(np.float32)
+            phys_targets = jnp.array(physarum_frames[phys_idx + 1])
+            phys_batch   = jnp.array(phys_grids)
+            key, *phys_key_list = random.split(key, n_physarum + 1)
+            phys_keys = jnp.stack(phys_key_list)
+            (physarum_loss, _), physarum_grads = physarum_loss_and_grad(
+                params, phys_batch, phys_targets, phys_keys
+            )
+            combined_grads = jax.tree_util.tree_map(
+                lambda g, p: g + p,
+                combined_grads, physarum_grads
+            )
 
         updates, opt_state = optimizer.update(combined_grads, opt_state)
         params = optax.apply_updates(params, updates)
 
-        # ── Write evolved states back to pools ─────────────────────────────
-        key, *gs_step_keys    = random.split(key, n_gs    + 1)
-        key, *lenia_step_keys = random.split(key, n_lenia + 1)
-        new_gs,    _ = nca_batch_step(params, gs_batch,    jnp.stack(gs_step_keys))
-        new_lenia, _ = nca_batch_step(params, lenia_batch, jnp.stack(lenia_step_keys))
-        new_gs_np    = np.array(new_gs)
-        new_lenia_np = np.array(new_lenia)
-        # Re-inject control channels after write-back so NCA can't corrupt them.
-        # Critical for Lenia: if sigma (ch15) drifts to 0, the Lenia target
-        # step computes (U-mu)/sigma → division by zero → NaN cascade.
+        # ── Write evolved states back to GS pool ──────────────────────────
+        key, *gs_step_keys = random.split(key, n_gs + 1)
+        new_gs, _ = nca_batch_step(params, gs_batch, jnp.stack(gs_step_keys))
+        new_gs_np = np.array(new_gs)
         new_gs_np[:, :, :, CH_PHYSICS] = 0.0
         new_gs_np[:, :, :, CH_F]       = np.array(gs_batch[:, :, :, CH_F])
         new_gs_np[:, :, :, CH_K]       = np.array(gs_batch[:, :, :, CH_K])
-        new_lenia_np[:, :, :, CH_PHYSICS] = 1.0
-        new_lenia_np[:, :, :, CH_F]       = np.array(lenia_batch[:, :, :, CH_F])
-        new_lenia_np[:, :, :, CH_K]       = np.array(lenia_batch[:, :, :, CH_K])
         if not np.any(np.isnan(new_gs_np)):
-            gs_pool[gs_idx]       = new_gs_np
-        if not np.any(np.isnan(new_lenia_np)):
-            lenia_pool[lenia_idx] = new_lenia_np
+            gs_pool[gs_idx] = new_gs_np
 
-        # ── Refresh pools with fresh states ───────────────────────────────
-        # GS: inject one fresh GS state every GS_REFRESH_EVERY steps
+        if not gs_only and n_lenia > 0:
+            key, *lenia_step_keys = random.split(key, n_lenia + 1)
+            new_lenia, _ = nca_batch_step(params, lenia_batch, jnp.stack(lenia_step_keys))
+            new_lenia_np = np.array(new_lenia)
+            new_lenia_np[:, :, :, CH_PHYSICS] = 1.0
+            new_lenia_np[:, :, :, CH_F]       = np.array(lenia_batch[:, :, :, CH_F])
+            new_lenia_np[:, :, :, CH_K]       = np.array(lenia_batch[:, :, :, CH_K])
+            if not np.any(np.isnan(new_lenia_np)):
+                lenia_pool[lenia_idx] = new_lenia_np
+
+        # ── Refresh pools ─────────────────────────────────────────────────
         if step % GS_REFRESH_EVERY == 0:
             key, sk = random.split(key)
             gs_pool[gs_idx[0]] = make_gs_pool_state(sk, TRAIN_H, TRAIN_W)
 
-        # Lenia: inject one fresh Lenia state every LENIA_REFRESH_EVERY steps
-        if step % LENIA_REFRESH_EVERY == 0:
+        if not gs_only and step % LENIA_REFRESH_EVERY == 0:
             lenia_pool[lenia_idx[0]] = make_lenia_pool_state_v2(
                 TRAIN_H, TRAIN_W, fK_np, lenia_rng,
                 hidden_noise=HIDDEN_INIT_NOISE,
@@ -422,20 +517,20 @@ def train():
             elapsed = time.time() - t_start
             rate    = (step + 1) / elapsed if elapsed > 0 else 1
             eta     = (TRAIN_STEPS - step) / rate / 60
-            print(
-                f" step {step:5d}/{TRAIN_STEPS}"
-                f"  gs={float(gs_loss):.5f}"
-                f"  lenia={float(lenia_loss):.5f}"
-                f"  lenia%={n_lenia/BATCH_SIZE*100:.0f}%"
-                f"  {rate:.1f}it/s  ETA {eta:.0f}m"
-            )
+            msg = f" step {step:5d}/{TRAIN_STEPS}  gs={float(gs_loss):.5f}"
+            if not gs_only:
+                msg += f"  lenia={float(lenia_loss):.5f}  lenia%={n_lenia/BATCH_SIZE*100:.0f}%"
+            if physarum:
+                msg += f"  phys={float(physarum_loss):.5f}"
+            msg += f"  {rate:.1f}it/s  ETA {eta:.0f}m"
+            print(msg)
 
         if step > 0 and step % CHECKPOINT_EVERY == 0:
-            save_checkpoint(params, step)
+            save_checkpoint(params, step, prefix=ckpt_prefix)
 
-    save_checkpoint(params, TRAIN_STEPS)
+    save_checkpoint(params, TRAIN_STEPS, prefix=ckpt_prefix)
     print(f"\nDone. {(time.time()-t_start)/60:.1f} minutes")
-    print(f"Checkpoint: lenia_{TRAIN_STEPS:06d}.pkl")
+    print(f"Checkpoint: {ckpt_prefix}_{TRAIN_STEPS:06d}.pkl")
     return params
 
 

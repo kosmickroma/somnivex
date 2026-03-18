@@ -9,6 +9,23 @@ A compact NCA (17,000 parameters) trained simultaneously on three incompatible L
 
 ---
 
+## Blind Stigmergy Battle (2026-03-18)
+
+**[▶ Watch on YouTube](https://youtu.be/9yP2SXGnSkA)**
+
+Two frontier LLMs — Claude Sonnet (Destroyer) and Gemini Flash (Keeper) — given opposing goals, access to the same NCA, and zero knowledge of each other. The only thing between them is the grid. Neither knows the other exists. Neither knows the whole picture.
+
+- **Claude's goal:** drive the grid to permanent extinction
+- **Gemini's goal:** keep the ecosystem alive indefinitely
+- **The NCA's role:** it doesn't know any of this is happening
+
+This is blind stigmergy — the same mechanism ants use to coordinate without ever meeting. Each LLM reads a neutral feature CSV (numbers only), issues one command per turn, and the NCA physics transforms the signal between them. Multiple extinctions and recoveries observed in a single unscripted run.
+
+Full design spec: [`kktodo/plan/BLIND_STIGMERGY.md`](kktodo/plan/BLIND_STIGMERGY.md)
+Bridge code: [`nca/llm_bridge.py`](nca/llm_bridge.py)
+
+---
+
 ## v2 — The Ecosystem (2026-03-17)
 
 The v2 model was trained on Gray-Scott plus three Lenia species simultaneously. In free run it self-organizes into a stable predator/prey ecosystem that repeats reproducibly across cold starts with no human intervention.
@@ -71,7 +88,7 @@ All images are unedited captures from the live simulation. No post-processing be
 
 ---
 
-**Anti-creature locomotion** — dark voids translating through a solid activation field. Negative-space solitons. Neither Gray-Scott nor Lenia produces these. They emerge from the fused model spontaneously, merge with each other, and vary in size and speed.
+**Void Soliton locomotion** — dark voids translating through a solid activation field. Negative-space solitons. Neither Gray-Scott nor Lenia produces these. They emerge from the fused model spontaneously, merge with each other, and vary in size and speed.
 
 | | |
 |---|---|
@@ -79,7 +96,7 @@ All images are unedited captures from the live simulation. No post-processing be
 
 ---
 
-**Anti-creature morphology sequence** — the same anti-creature evolving its shape over ~1600 steps. Compact void (step 58280) → growing corona (58645) → elongated crescent (59930). GS mode, no intervention.
+**Void Soliton morphology sequence** — the same Void Soliton evolving its shape over ~1600 steps. Compact void (step 58280) → growing corona (58645) → elongated crescent (59930). GS mode, no intervention.
 
 | | | |
 |---|---|---|
@@ -87,7 +104,7 @@ All images are unedited captures from the live simulation. No post-processing be
 
 ---
 
-**Three-population coexistence** — anti-creatures (black voids), discrete bright gliders, and a continuous background field all present simultaneously on the same grid. Confirmed via save-state analysis: the B channel histogram shows three distinct populations at the same step count. All three running at once, none interfering with the others' stability. Free channel mode, step 83495.
+**Three-population coexistence** — Void Solitons (black voids), discrete bright gliders, and a continuous background field all present simultaneously on the same grid. Confirmed via save-state analysis: the B channel histogram shows three distinct populations at the same step count. All three running at once, none interfering with the others' stability. Free channel mode, step 83495.
 
 | |
 |---|
@@ -143,9 +160,9 @@ Behaviors observed that exist in neither training distribution:
 
 **Synchronized blob arrays** — self-organized groups maintain coordinated spacing while drifting. Each blob on its own trajectory. The array holds formation.
 
-**Anti-creatures** — dark voids translating through a solid activation field. The *absence* of activation as the entity. Negative-space solitons.
+**Void Solitons** — dark voids translating through a solid activation field. The *absence* of activation as the entity. Stable propagating depressions in the reaction-diffusion field — the exact analog of dark solitons in nonlinear optics. Neither teacher produced them. They emerge from the fused weights spontaneously, merge with each other, and vary in size and speed.
 
-**Anti-creature merging** — multiple voids combine into a single larger elongated structure.
+**Void Soliton merging** — multiple voids combine into a single larger elongated structure.
 
 **Toroidal standing wave** — activation frame around the entire grid perimeter, dark void at center. The grid's wrap-around boundary conditions made visible as a global attractor. Reproduced across multiple runs.
 
@@ -167,7 +184,15 @@ Behaviors observed that exist in neither training distribution:
 
 The behaviors above are not locked behind the Lenia physics mode. Lenia-mode behaviors bleed into GS mode spontaneously because the weights can't fully separate the two physics — they share the same 17,000 parameters. The model doesn't have two modes. It has a continuous behavior space, and ch13 biases which region it explores.
 
-Flipping the physics bit during a run (T key) at any step count can produce exotic global attractors — synchronized flocking, toroidal standing waves, anti-creatures — that are unreachable from a cold start. The hidden channel state accumulated during prior running becomes the launching pad. These states have been reproduced from as early as 3,000 steps with a single keypress.
+In v1, flipping the physics bit during a run (T key) could produce exotic transient attractors — synchronized flocking, toroidal standing waves, anti-creatures — that were unreachable from a cold start. The hidden channel state accumulated during prior running acted as a launching pad.
+
+**v2 behavior has changed.** Flipping to Lenia mode (T key) now produces a single deterministic outcome every time: one unbreakable full-screen blob that fills the entire grid. This happens on every cold start, every run, regardless of prior GS state. It is not a transient — the system locks there and does not leave. Near Extinction seeds, regime jumps, and key interventions that reliably steer GS-mode states do not break it.
+
+Occasionally, small dark voids (Void Solitons) attempt to form inside the monolith — GS depletion chemistry trying to carve out space against Lenia reinforcement — but they cannot sustain. They collapse back within hundreds of steps.
+
+The interpretation: v2 training made ch4 so effective at maintaining interfaces and suppression zones that the Lenia attractor is now globally self-reinforcing. The entire grid becomes one giant ch4-stabilized boundary. The GS-mode ecosystem (predator/prey cycles, ring populations, labyrinthine creatures) runs on top of a carefully balanced energy distribution that the Lenia ground state collapses into a single uniform energy sink.
+
+This is not a bug. It is the Lenia floor — the deepest attractor basin the v2 weights contain. What happens there, and whether it can be escaped, is an open experiment.
 
 The hidden channels (ch2–12, 11 floats per cell that nobody assigned meaning to) appear to carry something that behaves like a physical potential field with multiple stable configurations — a landscape with many basins, some only accessible via specific paths through state space.
 
@@ -378,6 +403,49 @@ These jump to specific f/k parameter sets. Their effect in this fused model diff
 - `[ ]` **Gradual physics bit fade** — ramp ch13 over ~1000 steps instead of instant flip
 - `[ ]` **Comparison video** — GS-only vs fused, same seed, same duration, side by side
 - `[ ]` **Retrain classifier** — add new states from v2 runs (Lenia Chaos / Extreme Regime); fix Stable ↔ Near Extinction misclassification
+- `[ ]` **Physarum third teacher** — add slime mold trail dynamics (ch13=0.5) as third physics; watch whether ch5 activates for directed persistence
+- `[ ]` **GS-only grammar alignment** — run GS-only model with proper hidden channel training; Hungarian-match cluster centroids against fused model to test universal grammar hypothesis
+
+---
+
+## Future Directions
+
+These are not planned features. They are hypotheses worth testing.
+
+---
+
+### Compartmentalized Substrate with Chemical Walls and Doors
+
+**What:** Force A=1.0, B=0.0 on a persistent line of cells after each NCA step. This creates a chemical wall — B-rich structures cannot cross because their chemistry collapses against the barrier. A door is a gap in the line. Open/close by toggling which cells receive the forced values.
+
+**Why it's trivially implementable:** the existing attractor seed system already forces chemistry into arbitrary cells post-step. A wall is just a persistent line-shaped seed. No retraining required.
+
+**What should happen:**
+- Creatures pile up at the wall face (the NCA treats forced-chemistry boundaries as wounds)
+- Open the door → creatures rush through the gap
+- Close the door → creatures on the wrong side are isolated
+- Over time, genuinely different ecosystems develop on each side
+
+**The real implication:** different behavioral grammar per sector. Run a separate feature extractor and classifier on each sector. Each sector has its own state, its own transition history, its own attractor basin — isolated from the others until a door opens.
+
+**Per-sector physics:** force different f/k values on each side of the wall. Creatures crossing the door enter a different physical regime. A worms ecosystem on the left, a coral ecosystem on the right, connected by a controllable gate.
+
+---
+
+### Multi-LLM Substrate
+
+**What:** Each walled sector has its own LLM observer. Each LLM reads its sector's feature vector in plain English, decides when and where to open doors, and stamps attractor seeds into its sector. The LLMs do not communicate directly — they communicate by controlling the chemistry that flows between sectors.
+
+**Why this is different from existing multi-agent frameworks:** most multi-agent LLM systems have agents passing text messages. Here the agents act on a shared physical substrate and observe the consequences. The communication IS the chemistry. No message-passing protocol needed — the grid is the protocol.
+
+**The immune response experiment (runnable today):**
+1. Divide grid with a wall. Left sector: active Rich Ecosystem. Right sector: stamp Near Extinction seed (dead zone).
+2. Open door between sectors.
+3. Observe: does chemistry flood through the door to repair the dead zone? Does the NCA's wound-healing mechanism operate across sector boundaries?
+
+This is a primitive immune response. Demonstrable with current code.
+
+**Longer term:** an advanced NCA as the substrate between LLMs — not a message bus, not an API, but a continuous dynamical medium that carries, transforms, and routes information spatially. Hyper-fast (JAX, thousands of steps/second), self-healing (wound response confirmed), compositional (multiple independent grammars in separate sectors). The doors are the synapses.
 
 ---
 

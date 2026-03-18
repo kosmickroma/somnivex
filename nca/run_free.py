@@ -19,6 +19,7 @@ import pygame
 import jax
 import jax.numpy as jnp
 from jax import random
+from collections import deque
 from scipy import ndimage as _ndimage
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -42,34 +43,78 @@ AUTO_LOG_EVERY    = 200          # steps between feature vector logs
 LOG_DIR           = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
 CLASSIFIER_PATH   = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'state_classifier.pkl')
 RESEARCH_PALETTE  = 'neon_city'
+CMD_FILE          = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'llm_commands.txt')
+CMD_FILE_KEEPER   = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'llm_commands_keeper.txt')
+CMD_FILE_DESTROYER= os.path.join(os.path.dirname(os.path.abspath(__file__)), 'llm_commands_destroyer.txt')
+TURN_FILE         = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'battle_turn.txt')
+CMD_POLL_EVERY    = 30   # frames between command file checks
+BATTLE_TURN_STEPS = 500   # NCA steps between battle turns (~8s on GPU)
 RESEARCH_RENDER   = 'edges'
 RESEARCH_EFFECT   = 'vignette'
 
 STATE_NAMES = {
-    0: 'Chaos/Init',
-    1: 'Stable Ecosystem',
-    2: 'Heat Death',
-    3: 'Near Extinction',
-    4: 'Rich Ecosystem',
-    5: 'Predator Invasion',
-    6: 'Pre-activation',
-    7: 'Zombie',
+    0: 'Predator Invasion',
+    1: 'Global Blob',
+    2: 'Stable Ecosystem',
+    3: 'Chaos/Transition',
 }
+
+_blob_centroid_history = deque(maxlen=2)  # rolling buffer for blob mobility (2 samples = 400 steps)
 
 def extract_features(grid_np):
     a, b = grid_np[:,:,0], grid_np[:,:,1]
+    ch2 = grid_np[:,:,2]
+    ch4 = grid_np[:,:,4]
     lo = a < 0.80
     labeled, n = _ndimage.label(lo)
     sizes = sorted([np.sum(labeled==i) for i in range(1,n+1)], reverse=True)
-    ch4 = grid_np[:,:,4]
     corr = np.corrcoef(ch4.flatten(), b.flatten())[0,1] if ch4.std()>1e-6 else 0.0
+
+    # ── New features ──────────────────────────────────────────────────────────
+    if n > 0:
+        # Border ratio: ch4 and ch2 enrichment at largest blob edge vs global mean
+        largest_label = max(range(1, n+1), key=lambda i: np.sum(labeled==i))
+        blob_mask = (labeled == largest_label)
+        eroded = _ndimage.binary_erosion(blob_mask, iterations=3)
+        border_mask = blob_mask & ~eroded
+        ch4_global = ch4.mean()
+        ch4_border_ratio = (ch4[border_mask].mean() / (ch4_global + 1e-9)) if border_mask.any() else 1.0
+        ch2_global = ch2.mean()
+        ch2_border_ratio = (ch2[border_mask].mean() / (ch2_global + 1e-9)) if border_mask.any() else 1.0
+
+        # Blob mobility: centroid displacement of top-2 blobs between samples
+        top_labels = sorted(range(1, n+1), key=lambda i: np.sum(labeled==i), reverse=True)[:2]
+        centroids = []
+        for lbl in top_labels:
+            coords = np.where(labeled == lbl)
+            centroids.append((float(np.mean(coords[0])), float(np.mean(coords[1]))))
+        while len(centroids) < 2:
+            centroids.append((0.0, 0.0))
+        _blob_centroid_history.append(centroids)
+        if len(_blob_centroid_history) >= 2:
+            prev, curr = _blob_centroid_history[-2], _blob_centroid_history[-1]
+            d1 = np.sqrt((curr[0][0]-prev[0][0])**2 + (curr[0][1]-prev[0][1])**2)
+            d2 = np.sqrt((curr[1][0]-prev[1][0])**2 + (curr[1][1]-prev[1][1])**2)
+            blob_mobility = float((d1 + d2) / 2.0)
+        else:
+            blob_mobility = 0.0
+    else:
+        ch4_border_ratio = 1.0
+        ch2_border_ratio = 1.0
+        blob_mobility = 0.0
+
+    # Suppression zone: ch4 elevated AND B depleted (predator hunting zone signature)
+    ch4_mean = ch4.mean()
+    suppression_zone_frac = float(np.mean((ch4 > 1.2 * ch4_mean) & (b < 0.05))) if ch4_mean > 1e-6 else 0.0
+
     feat = [
         np.mean(a>0.97), np.mean(a<0.80), np.mean(b>0.08), a.std(), b.max(),
-        grid_np[:,:,2].std(), grid_np[:,:,4].std(), grid_np[:,:,5].std(),
+        ch2.std(), ch4.std(), grid_np[:,:,5].std(),
         n, sizes[0] if sizes else 0, sizes[1] if len(sizes)>1 else 0,
         np.std(sizes) if sizes else 0,
         np.mean(a[:,:32]<0.80), np.mean(a[:,32:]<0.80),
-        abs(np.mean(a[:,:32]<0.80)-np.mean(a[:,32:]<0.80)), corr
+        abs(np.mean(a[:,:32]<0.80)-np.mean(a[:,32:]<0.80)), corr,
+        ch4_border_ratio, ch2_border_ratio, blob_mobility, suppression_zone_frac
     ]
     return [0.0 if (v != v) else float(v) for v in feat]  # replace NaN with 0
 
@@ -78,7 +123,7 @@ CHECKPOINT = os.path.join(
     os.path.dirname(__file__), 'checkpoints', 'lenia_100000.pkl'
 )
 GS_CHECKPOINT = os.path.join(
-    os.path.dirname(__file__), 'checkpoints', 'params_050000.pkl'
+    os.path.dirname(__file__), 'checkpoints', 'gs_only_100000.pkl'
 )
 
 # Physics bit — 0.0 = GS mode, 1.0 = Lenia mode.
@@ -367,9 +412,10 @@ def run():
     if SOUND_ENABLED:
         sound.start()
 
-    step_count      = 0
-    running         = True
-    auto_nudges     = 0
+    step_count            = 0
+    running               = True
+    auto_nudges           = 0
+    _battle_next_turn_step = 0   # step at which to advance battle turn
     steps_per_frame = STEPS_PER_FRAME
     physics_bit     = PHYSICS_BIT
 
@@ -384,8 +430,7 @@ def run():
     # Autonomous extreme burst schedule
     next_extreme    = np.random.randint(EXTREME_INTERVAL_MIN, EXTREME_INTERVAL_MAX)
 
-    # Autonomous reseed schedule
-    next_reseed     = np.random.randint(RESEED_INTERVAL_MIN, RESEED_INTERVAL_MAX)
+    # Autonomous reseed schedule (disabled — R key still works for manual reseeds)
 
     # Palette crossfade state
     palette_current = np.array(palette, dtype=np.float32)
@@ -413,7 +458,18 @@ def run():
     current_state     = -1
     state_hud_str     = ''
     _ctrl_tgt_idx     = 0   # index into _CTRL_TARGETS for C key cycling
-    _CTRL_TARGETS     = [4, 1, 5, 3, 7]  # Rich, Stable, Predator, Near Extinction, Zombie
+    _CTRL_TARGETS     = [0, 1, 2, 3]  # Predator Invasion, Global Blob, Stable Ecosystem, Chaos
+
+    # ── Wall / door system ────────────────────────────────────────────────────
+    # W key: toggle wall-draw mode. Click+drag paints wall cells.
+    # D key: clear all walls. Right-click in wall mode: erase wall cells.
+    # Post-step: wall cells are forced to A=1.0, B=0.0 every frame.
+    wall_mode    = False
+    wall_mask    = np.zeros((GRID_H, GRID_W), dtype=bool)
+    wall_drawing = False   # True while mouse button held in wall mode
+    wall_erase   = False   # True for right-click erase
+    jwall        = jnp.zeros((GRID_H, GRID_W), dtype=bool)
+    WALL_BRUSH   = 2       # brush radius in grid cells
 
     # ── Attractor seed (click-to-place) ───────────────────────────────────────
     # V key cycles which state to paint. Mouse click stamps that state's hidden
@@ -455,7 +511,8 @@ def run():
         _writer.writerow(['step','state_id','state_name','physics_bit',
                           'bg','dark','b_active','a_std','b_max',
                           'ch2','ch4','ch5','n_blobs','largest','second',
-                          'size_std','left_dark','right_dark','asym','corr_ch4_b'])
+                          'size_std','left_dark','right_dark','asym','corr_ch4_b',
+                          'ch4_border_ratio','ch2_border_ratio','blob_mobility','suppression_zone_frac'])
         log_csv.flush()
         # Intervention log — records every keypress with step + effect
         _int_path   = os.path.join(LOG_DIR, f'interventions_{_run_ts}.csv')
@@ -658,6 +715,15 @@ def run():
                     grid = grid.at[:, :, 2:14].add(noise)
                     print("Z: hidden channel chaos injection")
 
+                if event.key == pygame.K_w:
+                    wall_mode = not wall_mode
+                    print(f"Wall mode: {'ON — click+drag to draw, right-click to erase' if wall_mode else 'OFF'}")
+
+                if event.key == pygame.K_d:
+                    wall_mask[:] = False
+                    jwall = jnp.zeros((GRID_H, GRID_W), dtype=bool)
+                    print("Walls cleared")
+
                 if event.key == pygame.K_c:
                     # Directional hidden channel injection toward target cluster centroid.
                     # Each press cycles the target state, then steers ch2/ch4/ch5 toward it.
@@ -714,8 +780,32 @@ def run():
                     _sname = SEED_LABELS[SEED_STATES[_seed_state_idx]]
                     print(f"V: paint state → {_sname}  (click to stamp on grid)")
 
+            # ── Mouse: wall draw / erase ──────────────────────────────────────
+            if event.type == pygame.MOUSEBUTTONDOWN and wall_mode:
+                wall_drawing = True
+                wall_erase   = (event.button == 3)  # right-click = erase
+                mx, my = event.pos
+                gx = int(mx * GRID_W / DISPLAY_W)
+                gy = int(my * GRID_H / DISPLAY_H)
+                y0 = max(0, gy - WALL_BRUSH); y1 = min(GRID_H, gy + WALL_BRUSH + 1)
+                x0 = max(0, gx - WALL_BRUSH); x1 = min(GRID_W, gx + WALL_BRUSH + 1)
+                wall_mask[y0:y1, x0:x1] = not wall_erase
+                jwall = jnp.array(wall_mask)
+
+            if event.type == pygame.MOUSEMOTION and wall_drawing:
+                mx, my = event.pos
+                gx = int(mx * GRID_W / DISPLAY_W)
+                gy = int(my * GRID_H / DISPLAY_H)
+                y0 = max(0, gy - WALL_BRUSH); y1 = min(GRID_H, gy + WALL_BRUSH + 1)
+                x0 = max(0, gx - WALL_BRUSH); x1 = min(GRID_W, gx + WALL_BRUSH + 1)
+                wall_mask[y0:y1, x0:x1] = not wall_erase
+                jwall = jnp.array(wall_mask)
+
+            if event.type == pygame.MOUSEBUTTONUP:
+                wall_drawing = False
+
             # ── Mouse click — stamp attractor seed ────────────────────────────
-            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not wall_mode:
                 mx, my = event.pos
                 # Map screen → grid coordinates (grid is scaled to fill display)
                 gx = int(mx * GRID_W / DISPLAY_W)
@@ -728,19 +818,25 @@ def run():
                 y0, y1 = max(0, gy - r), min(GRID_H, gy + r)
                 x0, x1 = max(0, gx - r), min(GRID_W, gx + r)
                 h, w   = y1 - y0, x1 - x0
+                # Mask out wall cells — don't stamp over walls, only deposit on one side
+                _stamp_mask = ~wall_mask[y0:y1, x0:x1]  # True where we CAN stamp
                 # Write visible chemistry (A and B) — this is the key part.
                 # Hidden-channel-only injection gets swamped in a few steps.
                 # Writing A/B sets the actual reaction state the NCA evolves from.
                 if _sp['a_val'] is not None:
-                    grid = grid.at[y0:y1, x0:x1, 0].set(_sp['a_val'])
+                    _a_patch = np.where(_stamp_mask, _sp['a_val'], np.array(grid[y0:y1, x0:x1, 0]))
+                    grid = grid.at[y0:y1, x0:x1, 0].set(jnp.array(_a_patch))
                 if _sp['b_val'] is not None:
-                    grid = grid.at[y0:y1, x0:x1, 1].set(_sp['b_val'])
+                    _b_patch = np.where(_stamp_mask, _sp['b_val'], np.array(grid[y0:y1, x0:x1, 1]))
+                    grid = grid.at[y0:y1, x0:x1, 1].set(jnp.array(_b_patch))
                 if _sp['zero_out']:
-                    # Death seed — kill all hidden channels in region
-                    grid = grid.at[y0:y1, x0:x1, 2:13].set(0.0)
+                    # Death seed — kill all hidden channels in region (skip wall cells)
+                    for _chi in range(2, 13):
+                        _cur = np.array(grid[y0:y1, x0:x1, _chi])
+                        grid = grid.at[y0:y1, x0:x1, _chi].set(jnp.array(np.where(_stamp_mask, 0.0, _cur)))
                 else:
                     if _sp['ch2_amp'] > 0:
-                        _n2 = np.random.normal(0, _sp['ch2_amp'], (h, w)).astype(np.float32)
+                        _n2 = np.where(_stamp_mask, np.random.normal(0, _sp['ch2_amp'], (h, w)).astype(np.float32), 0.0)
                         grid = grid.at[y0:y1, x0:x1, 2].add(jnp.array(_n2))
                     if _sp['ch4_amp'] > 0:
                         if _sp['ch4_ring']:
@@ -774,6 +870,10 @@ def run():
             # Only inject physics bit if not in free mode
             if not release_physics:
                 grid = grid.at[:, :, CH_PHYSICS].set(physics_bit)
+            # Wall injection — force A=1.0, B=0.0 on wall cells every step
+            if np.any(wall_mask):
+                grid = grid.at[:, :, CH_A].set(jnp.where(jwall, 1.0, grid[:, :, CH_A]))
+                grid = grid.at[:, :, CH_B].set(jnp.where(jwall, 0.0, grid[:, :, CH_B]))
             step_count += 1
 
         # ── Research: auto feature logging + state HUD + transition saves ─
@@ -786,6 +886,10 @@ def run():
                 _Xs = classifier['scaler'].transform([_feat])
                 _state_id = int(classifier['kmeans'].predict(_Xs)[0])
                 _state_name = STATE_NAMES.get(_state_id, str(_state_id))
+            # Override: blank screen = extinction regardless of classifier
+            if _feat[2] < 0.01 and _feat[8] == 0:  # b_active < 1%, n_blobs == 0
+                _state_name = 'Extinction'
+                _state_id   = -2
             # Log to CSV
             if log_csv is not None:
                 csv.writer(log_csv).writerow(
@@ -942,6 +1046,98 @@ def run():
                 auto_nudges += 1
                 print(f"Solid screen (std={b_std:.4f}) → reseed #{auto_nudges}  f={f:.4f} k={k:.4f}")
 
+        # ── LLM command executor (shared by single-agent and battle mode) ──
+        def _execute_llm_command(_cmd, _label='LLM'):
+            nonlocal grid, f, k, f_field, k_field, jf_field, jk_field, key, regime_idx
+            if _cmd == 'inject_chaos':
+                _noise = jnp.array(np.random.uniform(-0.5, 0.5, (GRID_H, GRID_W, 12)).astype(np.float32))
+                grid = grid.at[:, :, 2:14].add(_noise)
+                print(f"  [{_label}] inject_chaos")
+            elif _cmd == 'reset':
+                regime_idx = np.random.randint(0, len(regime_names))
+                f, k = GS_REGIMES[regime_names[regime_idx]]
+                key, sk = random.split(key)
+                grid, key = init_nca_grid(sk, GRID_H, GRID_W, f, k)
+                f_field, k_field = make_fk_field(GRID_H, GRID_W, f, k, phase_fx, phase_fy, phase_kx, phase_ky)
+                jf_field = jnp.array(f_field)
+                jk_field = jnp.array(k_field)
+                print(f"  [{_label}] reset → {regime_names[regime_idx]}")
+            elif _cmd in ('regime_0', 'regime_1', 'regime_2', 'regime_3'):
+                _rmap = {'regime_0': 'uskate', 'regime_1': 'mitosis', 'regime_2': 'gliders', 'regime_3': 'maze'}
+                _rname = _rmap[_cmd]
+                f, k = GS_REGIMES[_rname]
+                f_field, k_field = make_fk_field(GRID_H, GRID_W, f, k, phase_fx, phase_fy, phase_kx, phase_ky)
+                jf_field = jnp.array(f_field)
+                jk_field = jnp.array(k_field)
+                print(f"  [{_label}] {_cmd} → {_rname}")
+
+        # ── LLM bridge command polling (single-agent) ─────────────────────
+        if step_count % CMD_POLL_EVERY == 0 and os.path.exists(CMD_FILE):
+            try:
+                with open(CMD_FILE, 'r') as _cf:
+                    _cmd = _cf.read().strip().lower()
+                if _cmd and _cmd != 'none':
+                    _execute_llm_command(_cmd)
+                    with open(CMD_FILE, 'w') as _cf:
+                        _cf.write('none')
+            except Exception:
+                pass   # never crash the main loop on bridge errors
+
+        # ── Battle mode command polling ───────────────────────────────────
+        if step_count % CMD_POLL_EVERY == 0:
+            try:
+                # Read whose turn it is
+                _battle_turn = None
+                _battle_turn_num = 0
+                if os.path.exists(TURN_FILE):
+                    with open(TURN_FILE, 'r') as _tf:
+                        _parts = _tf.read().strip().split()
+                        if _parts:
+                            _battle_turn = _parts[0]
+                            _battle_turn_num = int(_parts[1]) if len(_parts) > 1 else 0
+
+                # Execute keeper command if it's keeper's turn
+                if _battle_turn == 'keeper' and os.path.exists(CMD_FILE_KEEPER):
+                    with open(CMD_FILE_KEEPER, 'r') as _cf:
+                        _bcmd = _cf.read().strip().lower()
+                    if _bcmd and _bcmd != 'none':
+                        _execute_llm_command(_bcmd, 'KEEPER')
+                        with open(CMD_FILE_KEEPER, 'w') as _cf:
+                            _cf.write('none')
+                        # Advance turn after BATTLE_TURN_STEPS
+                        _battle_next_turn_step = step_count + BATTLE_TURN_STEPS
+
+                # Execute destroyer command if it's destroyer's turn
+                elif _battle_turn == 'destroyer' and os.path.exists(CMD_FILE_DESTROYER):
+                    with open(CMD_FILE_DESTROYER, 'r') as _cf:
+                        _bcmd = _cf.read().strip().lower()
+                    if _bcmd and _bcmd != 'none':
+                        _execute_llm_command(_bcmd, 'DESTROYER')
+                        with open(CMD_FILE_DESTROYER, 'w') as _cf:
+                            _cf.write('none')
+                        # Advance turn after BATTLE_TURN_STEPS
+                        _battle_next_turn_step = step_count + BATTLE_TURN_STEPS
+            except Exception:
+                pass
+
+        # Advance battle turn after N steps
+        if os.path.exists(TURN_FILE) and _battle_next_turn_step == 0:
+            _battle_next_turn_step = step_count + BATTLE_TURN_STEPS
+        if _battle_next_turn_step > 0 and step_count >= _battle_next_turn_step:
+            try:
+                if os.path.exists(TURN_FILE):
+                    with open(TURN_FILE, 'r') as _tf:
+                        _parts = _tf.read().strip().split()
+                        _cur = _parts[0] if _parts else 'keeper'
+                        _tnum = int(_parts[1]) if len(_parts) > 1 else 1
+                    _next = 'destroyer' if _cur == 'keeper' else 'keeper'
+                    with open(TURN_FILE, 'w') as _tf:
+                        _tf.write(f"{_next} {_tnum + 1}")
+                    print(f"  [BATTLE] Turn {_tnum + 1} → {_next.upper()}")
+                    _battle_next_turn_step = step_count + BATTLE_TURN_STEPS  # schedule next
+            except Exception:
+                pass
+
         # ── Autonomous render mode rotation ───────────────────────────────
         if step_count >= next_mode_change:
             render_mode_idx  = (render_mode_idx + 1) % len(NCA_RENDER_MODES)
@@ -982,10 +1178,22 @@ def run():
         # ── Render ────────────────────────────────────────────────────────
         render(screen, grid, blended_palette.astype(np.uint8).tolist(), render_mode, effect)
 
+        # ── Wall overlay — draw wall cells as bright yellow lines ─────────────
+        if np.any(wall_mask):
+            cell_w = max(1, SCREEN_W // GRID_W)
+            cell_h = max(1, SCREEN_H // GRID_H)
+            wall_color = (255, 200, 0) if not wall_mode else (255, 100, 0)
+            ys, xs = np.where(wall_mask)
+            for gy, gx in zip(ys, xs):
+                sx = gx * SCREEN_W // GRID_W
+                sy = gy * SCREEN_H // GRID_H
+                pygame.draw.rect(screen, wall_color, (sx, sy, cell_w, cell_h))
+
         palette_str = palette_names[palette_idx]
-        free_str = "  |  FREE-CH" if (free_channels and step_count >= FREE_WARMUP) else ""
+        free_str  = "  |  FREE-CH" if (free_channels and step_count >= FREE_WARMUP) else ""
+        wall_str  = "  |  WALL-DRAW (D=clear)" if wall_mode else ("  |  walls" if np.any(wall_mask) else "")
         hud = font.render(
-            f"step {step_count}  |  bit={physics_bit:.0f}({'L' if physics_bit else 'G'}){free_str}  f={f:.4f}±{FK_SPATIAL_AMP_F} k={k:.4f}±{FK_SPATIAL_AMP_K}  |  {palette_str}  |  {render_mode}+{effect}  |  spd={steps_per_frame}  |  T=physics A=sound M=mode E=effect P=palette F=poke X=extreme Z=chaos H=seed-hidden S=save",
+            f"step {step_count}  |  bit={physics_bit:.0f}({'L' if physics_bit else 'G'}){free_str}{wall_str}  f={f:.4f}±{FK_SPATIAL_AMP_F} k={k:.4f}±{FK_SPATIAL_AMP_K}  |  {palette_str}  |  {render_mode}+{effect}  |  spd={steps_per_frame}  |  W=walls D=clear T=physics A=sound M=mode E=effect P=palette F=poke Z=chaos S=save",
             True, (80, 80, 80)
         )
         screen.blit(hud, (10, 10))

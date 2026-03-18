@@ -195,6 +195,83 @@ reinventing a Nobel-adjacent theory of consciousness. Worth knowing.
 
 ---
 
+---
+
+## 12. Jeff Jones — Physarum Transport Networks (THE foundational paper)
+**Jones, 2010 — Artificial Life Vol. 16 No. 2**
+**URL:** https://pubmed.ncbi.nlm.nih.gov/20067403/
+
+The algorithm behind slime mold simulation. Two layers: a particle layer (agents sense trail
+concentration at three forward sensors, rotate toward the highest, deposit trail at new position)
+and a trail map layer (diffuses + decays each step). Three parameters control everything —
+sensor distance, sensor angle, decay rate — and produce Voronoi tessellations, Turing spots,
+highways, and spirals just by changing numbers.
+
+**Why it matters to Somnivex:** The trail map update is pure convolution + scalar multiply —
+exactly the form the NCA already uses. This is the cleanest third teacher candidate. No agents
+needed for training, just the field dynamics.
+
+---
+
+## 13. Adamatzky — From Reaction-Diffusion to Physarum Computing
+**Adamatzky, 2009 — Natural Computing Vol. 8**
+**URL:** https://link.springer.com/article/10.1007/s11047-009-9120-5
+**Also read first:** https://pubmed.ncbi.nlm.nih.gov/17603779/ (2007 paper, shorter)
+
+The key result: Physarum IS a reaction-diffusion system. Uses the Oregonator equations
+(same family as Gray-Scott) to reproduce Physarum's spanning-tree construction. The slime
+mold is just a bounded reaction-diffusion computer with a membrane.
+
+**Why it matters to Somnivex:** This changes the Physarum-as-third-teacher plan completely.
+GS and Physarum are NOT incompatible physics — they are the same physics class at different
+parameter regimes. This means training on Physarum won't create as much hidden-channel tension
+as Lenia did. The model might find the bridge representation much faster, with less distortion
+to existing behavior. Lenia (discrete moving creatures) was always the true outlier.
+
+---
+
+## 14. Richardson et al. — Learning Spatio-Temporal Patterns with NCA
+**2024 — PLOS Computational Biology**
+**URL:** https://arxiv.org/abs/2310.14809
+
+Trains a single NCA on time series from multiple reaction-diffusion PDEs. Key result:
+a model trained on one RD regime generalizes BEYOND its training distribution — it
+produces behaviors outside what any single teacher showed it. Also shows how to enforce
+symmetry constraints on the learned rule.
+
+**Why it matters:** Direct evidence that multi-physics NCA training produces a model that
+interpolates meaningfully rather than memorizing. This is the academic backing for
+exactly what we observed — the fused model producing Void Solitons and predator/prey
+cycles that neither teacher produced.
+
+---
+
+## 15. Petri Dish NCA (Sakana AI, 2025)
+**Zhang, Risi, Darlow — Sakana AI**
+**URL:** https://pub.sakana.ai/pdnca/
+
+Multiple independent NCA agents with different trained parameters coexist on a shared grid,
+learn continuously via backprop DURING simulation, and compete for self-replication.
+Emergent territorial defense, cyclic dominance, and cooperation arise spontaneously.
+
+**Why it matters:** Closest published work to "what happens when different trained physics
+coexist on one grid" — which is exactly the Void Soliton / predator coexistence question.
+From a credible lab (Sakana). Very recent.
+
+---
+
+## 16. The Basins Zoo (2025)
+**URL:** https://arxiv.org/html/2504.01580v1
+
+Systematically catalogs and classifies basin-of-attraction structures across a large
+library of dynamical systems. Not NCA-specific.
+
+**Why it matters:** If you want to claim that GS, Lenia, and Physarum share attractor
+geometry (the universal grammar hypothesis), this is the formal toolkit for making
+that claim with data. Read when you're ready to think about writing this up properly.
+
+---
+
 ## The through-line across all of these
 
 Every single paper above is attacking the same problem from a different angle:

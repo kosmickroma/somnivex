@@ -1061,6 +1061,8 @@ def run():
                 _zone_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'artist_state.json')
                 with open(_zone_path, 'w') as _azf:
                     _json.dump({'zones': _zones, 'step': step_count}, _azf)
+                _ss_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'artist_screenshot.png')
+                pygame.image.save(screen, _ss_path)
 
         # ── Spatial field phase drift ─────────────────────────────────────
         # Advance all four phases by their individual velocities each frame.
@@ -1278,14 +1280,15 @@ def run():
                     if len(_parts) >= 5:
                         x0,y0,x1,y1 = int(_parts[1]),int(_parts[2]),int(_parts[3]),int(_parts[4])
                         strength = float(_parts[5]) if len(_parts) > 5 else 0.5
+                        width    = int(_parts[6])   if len(_parts) > 6 else 2
                         for mirror in ([False,True] if artist_mirror else [False]):
                             mx0,mx1 = (GRID_W-1-x0,GRID_W-1-x1) if mirror else (x0,x1)
-                            for (gy,gx) in _bresenham_cells(mx0,y0,mx1,y1,brush=2):
+                            for (gy,gx) in _bresenham_cells(mx0,y0,mx1,y1,brush=width):
                                 _g[gy,gx] = strength
                                 trail_mask[gy,gx] = True
                         grid = grid.at[:,:,5].set(jnp.array(_g))
                         jtrail = jnp.array(trail_mask)
-                        print(f"  [{_label}] trail ({x0},{y0})→({x1},{y1}) str={strength:.2f}")
+                        print(f"  [{_label}] trail ({x0},{y0})→({x1},{y1}) str={strength:.2f} width={width}")
 
                 elif _brush == 'wall':
                     if len(_parts) >= 5:
@@ -1309,6 +1312,35 @@ def run():
                                 _g[gy,gx] = strength
                         grid = grid.at[:,:,5].set(jnp.array(_g))
                         print(f"  [{_label}] pulse ({x0},{y0})→({x1},{y1}) str={strength:.2f}")
+
+                elif _brush == 'curve':
+                    # curve x1 y1 bx by x2 y2 [strength] [width]
+                    # Quadratic bezier: bends from (x1,y1) toward (bx,by) and ends at (x2,y2)
+                    if len(_parts) >= 7:
+                        px0,py0 = int(_parts[1]),int(_parts[2])
+                        pbx,pby = int(_parts[3]),int(_parts[4])
+                        px1,py1 = int(_parts[5]),int(_parts[6])
+                        strength = float(_parts[7]) if len(_parts) > 7 else 0.5
+                        width    = int(_parts[8])   if len(_parts) > 8 else 2
+                        _g = np.array(grid[:,:,5])
+                        n_pts = max(60, int(np.hypot(px1-px0, py1-py0) * 1.5))
+                        for mirror in ([False,True] if artist_mirror else [False]):
+                            mx0 = GRID_W-1-px0 if mirror else px0
+                            mbx = GRID_W-1-pbx if mirror else pbx
+                            mx1 = GRID_W-1-px1 if mirror else px1
+                            for i in range(n_pts + 1):
+                                t = i / n_pts
+                                gx = int((1-t)**2*mx0 + 2*(1-t)*t*mbx + t**2*mx1)
+                                gy = int((1-t)**2*py0 + 2*(1-t)*t*pby + t**2*py1)
+                                for dy in range(-width, width+1):
+                                    for dx in range(-width, width+1):
+                                        ny,nx = gy+dy, gx+dx
+                                        if 0<=ny<GRID_H and 0<=nx<GRID_W:
+                                            _g[ny,nx] = strength
+                                            trail_mask[ny,nx] = True
+                        grid = grid.at[:,:,5].set(jnp.array(_g))
+                        jtrail = jnp.array(trail_mask)
+                        print(f"  [{_label}] curve ({px0},{py0})→bend({pbx},{pby})→({px1},{py1}) str={strength:.2f} width={width}")
 
                 elif _brush == 'wipe':
                     # wipe cx cy r — circular extinction zone (trail cells are protected)
@@ -1360,6 +1392,14 @@ def run():
                         grid = grid.at[:,:,1].set(jnp.array(_g_b))
                         print(f"  [{_label}] blob ({bx},{by}) str={strength:.2f} r={r}")
 
+                elif _brush == 'clear_trails':
+                    trail_mask[:] = False
+                    jtrail = jnp.zeros((GRID_H, GRID_W), dtype=bool)
+                    _g = np.array(grid[:,:,5])
+                    _g[:] = 0.0
+                    grid = grid.at[:,:,5].set(jnp.array(_g))
+                    print(f"  [{_label}] clear_trails — all trails erased")
+
                 elif _brush == 'reset':
                     regime_idx = np.random.randint(0, len(regime_names))
                     _f, _k = GS_REGIMES[regime_names[regime_idx]]
@@ -1401,6 +1441,22 @@ def run():
                                     if 0<=gy<GRID_H and 0<=gx<GRID_W:
                                         _g_a[gy,gx] = 0.3; _g_b[gy,gx] = 0.5
                                         _g_ch5[gy,gx] = 0.8; trail_mask[gy,gx] = True
+                            elif shape_type == 'arc':
+                                # shape arc cx cy r a_start a_end  (degrees, 0=right, 90=down)
+                                if len(_parts) >= 7:
+                                    a0 = float(_parts[5]) * np.pi / 180
+                                    a1 = float(_parts[6]) * np.pi / 180
+                                    n_pts = max(60, int(r * abs(a1-a0) / np.pi * 20))
+                                    brush_r = 2
+                                    for angle in np.linspace(a0, a1, n_pts):
+                                        gx = int(mcx + r*np.cos(angle))
+                                        gy = int(cy  + r*np.sin(angle))
+                                        for dy in range(-brush_r, brush_r+1):
+                                            for dx in range(-brush_r, brush_r+1):
+                                                ny,nx = gy+dy, gx+dx
+                                                if 0<=ny<GRID_H and 0<=nx<GRID_W:
+                                                    _g_a[ny,nx] = 0.3; _g_b[ny,nx] = 0.6
+                                                    _g_ch5[ny,nx] = 0.8; trail_mask[ny,nx] = True
                         grid = grid.at[:,:,0].set(jnp.array(_g_a))
                         grid = grid.at[:,:,1].set(jnp.array(_g_b))
                         grid = grid.at[:,:,5].set(jnp.array(_g_ch5))

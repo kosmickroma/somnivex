@@ -29,6 +29,10 @@ A compact NCA (17,000 parameters) trained simultaneously on three incompatible L
 
 *Left: composition in terminal_amber palette. Right: same composition in neon_city. The KK letterforms and central X are visible as living organism formations held by pheromone infrastructure.*
 
+![](screenshots/llm_artist_smiley.png)
+
+*Smiley face drawn by Gemini in candy_chrome palette. Eyes, smile, and outer ring held by pheromone trails — living organisms swarm the boundaries while the structure persists indefinitely.*
+
 **Why this is different from generative art:** A generative system renders an output. This system encodes intent into a substrate that continues executing it. The LLM wrote a program. The NCA is running it. The composition is not an image — it's a standing instruction that living matter is following.
 
 **The junction ring:** Gemini added this without being asked. It understood from the physics description that where trails cross, organisms accumulate and the structure is most vulnerable to chaos. It made a structural decision — protect the most important point — and executed it with a `shape ring` command. This is the first observed case of an LLM making an unsolicited architectural decision about a living system based on understanding of its physics.
@@ -42,33 +46,26 @@ Run: `python nca/run_free.py --physarum --artist --research` + `python nca/llm_b
 
 ## LLM Artist — Painting With Living Organisms (2026-03-19)
 
-The most recent development: an LLM issuing spatial commands onto a live NCA grid, directing organisms the way a choreographer directs dancers — not drawing pixels, but placing attractors that living matter fills in, holds, and evolves around.
+An LLM directing organisms the way a choreographer directs dancers — not drawing pixels, but placing attractors that living matter fills in, holds, and evolves around. Gemini 2.5 Flash reads a screenshot of the live canvas every ~5 seconds, decides what to draw next, and issues spatial commands. The human types direction in a third terminal and Gemini responds.
 
-**The setup:** Gemini 2.5 Flash runs in a second terminal, reading the NCA's feature state every ~6 seconds and writing brush commands to a shared file. `run_free.py` polls the file and executes them against the live grid. The human types direction in the terminal ("build a mandala", "tiger stripes in amber") and Gemini responds with commands and narration.
-
-**The brushes:**
-- `trail x1 y1 x2 y2` — draw a pheromone (ch5) line; organisms follow and hold it
-- `drift dx dy` — move the trail by (dx,dy) pixels every 30 steps; organisms chase it like a magnet. Shepherd, not sign.
-- `blob x y` — inject a single organism
-- `wipe cx cy r` — circular extinction zone
-- `shape ring/circle/spiral cx cy r` — geometric chemistry stamps
+**The brush toolkit:**
+- `trail x1 y1 x2 y2 [strength] [width]` — straight pheromone line; organisms follow and hold permanently
+- `curve x1 y1 bx by x2 y2` — smooth curved line bending toward (bx,by); for organic forms, rivers, branches
+- `shape ring/circle/arc/spiral cx cy r` — geometry stamps with chemistry; instantly populated, no blob needed
+- `blob x y` — seed organisms near an isolated trail only; shapes never need this
+- `wipe cx cy r` / `wipe_rect` — precision kill zones; trail cells are always protected
 - `pulse x1 y1 x2 y2` — spike ch5 to snap drifting organisms back to a line
-- `palette <name>` / `trailcolor r g b` — change the visual mood
-- `mirror on/off` — bilateral symmetry; every brush command applied to both sides
-- `DONE` — declare the composition complete; bridge enters hold mode, pulsing trails to maintain structure indefinitely without further API calls
+- `palette <name>` — 10 palettes: neon_city, aurora, candy_chrome, sakura, terminal_amber...
+- `mirror on/off` — bilateral symmetry across vertical axis
+- `clear_trails` — erase all trails, start a new painting (organisms keep running)
 
-**What actually happened:** In the first working session, Gemini drew an X pattern to concentrate organisms at the center, then built outward with ring shapes. When asked for "tiger stripes," it issued 7 evenly-spaced vertical trails with amber palette and dark trail glow — organisms locked onto each stripe and held formation. When asked to hold, it issued `DONE` and the terminal printed:
+**Vision feedback:** Gemini receives a screenshot of the actual canvas with every turn. It can see what it drew, assess spatial relationships, and self-correct — "the peak is off-center, adding a trail to the right slope."
 
-```
-  ── HOLDING THE COMPOSITION. AWAITING YOUR COMMAND.
-  "The stripes hold. I am watching the borders."
-  ──────────────────────────────────────────────────
-  AWAITING DIRECTION  [10:14:33]
-```
+**Key distinction — trail vs shape:**
+- `trail`/`curve` write only the pheromone path. Organisms must flow in from nearby populations.
+- `shape` commands write pheromone AND chemistry directly — they light up with organisms immediately.
 
-**The drift tool addresses a fundamental problem** with static trail placement: organisms collect on the line and then just sit there. `drift` turns the trail into a moving attractor — a broom. Draw a short trail near existing population, issue `drift 2 0`, and the trail slides rightward every 30 steps. The organisms chase it across the canvas.
-
-**This is not generative art.** The LLM isn't rendering pixels. It's issuing spatial commands that create physical gradients in a living system. The composition responds, self-organizes, and evolves. The line Gemini drew has agency — it becomes a population that breathes.
+**This is not generative art.** The LLM isn't rendering pixels. It's writing standing instructions into the physics of a living substrate. The NCA executes those instructions indefinitely whether the LLM is watching or not.
 
 Bridge code: [`nca/llm_bridge.py`](nca/llm_bridge.py) (`--artist --provider gemini`)
 

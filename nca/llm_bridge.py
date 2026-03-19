@@ -31,7 +31,7 @@ TURN_FILE    = os.path.join(os.path.dirname(__file__), 'battle_turn.txt')
 CHECK_EVERY  = 15        # seconds between checks (single-agent mode)
 TURN_POLL    = 2         # seconds between turn file polls (battle mode)
 ROWS_TO_READ = 5         # how many recent feature rows to summarize
-MAX_HISTORY  = 6         # how many prior exchanges to keep in context
+MAX_HISTORY  = 12        # how many prior exchanges to keep in context
 
 DEFAULT_MODELS = {
     'anthropic': 'claude-sonnet-4-6',
@@ -308,7 +308,7 @@ def make_anthropic_client(model, system_prompt, max_tokens=120):
         sys.exit(1)
     client = anthropic.Anthropic()
 
-    async def call(history):
+    async def call(history, image_bytes=None):  # image_bytes ignored for Anthropic for now
         response = client.messages.create(
             model=model,
             max_tokens=max_tokens,
@@ -333,11 +333,14 @@ def make_gemini_client(model, system_prompt, max_tokens=120):
         sys.exit(1)
     client = genai.Client(api_key=api_key)
 
-    async def call(history):
+    async def call(history, image_bytes=None):
         contents = []
-        for msg in history:
+        for i, msg in enumerate(history):
             role = 'user' if msg['role'] == 'user' else 'model'
-            contents.append(types.Content(role=role, parts=[types.Part(text=msg['content'])]))
+            parts = [types.Part(text=msg['content'])]
+            if image_bytes and i == len(history) - 1 and role == 'user':
+                parts.append(types.Part.from_bytes(data=image_bytes, mime_type='image/png'))
+            contents.append(types.Content(role=role, parts=parts))
         response = client.models.generate_content(
             model=model,
             contents=contents,
@@ -355,33 +358,35 @@ def make_gemini_client(model, system_prompt, max_tokens=120):
 # ── Artist system prompt ──────────────────────────────────────────────────────
 
 SYSTEM_PROMPT_ARTIST = """You are an artist painting with living organisms on a 256×256 grid.
+Each turn you receive a screenshot of the current canvas. Use it to judge your work and plan the next stroke.
 Grid: (0,0)=top-left, (255,255)=bottom-right. Center is (128,128).
+Directions: x increases RIGHT, y increases DOWN. Top-right corner = (224,32). Bottom-left = (32,224).
+"In front of" a house facing viewer = BELOW it (higher y). "Above" = lower y. "Left" = lower x. "Right" = higher x.
+Arc angles: 0=right 90=down 180=left 270=up. Top-half arc (sun/dome) = 180→360. Bottom-half (bowl/smile) = 0→180.
 
 THE ONE RULE — understand this and everything else follows:
 Your TRAILS are your art. Organisms lock onto pheromone trails and hold them permanently.
 The trail re-injects itself every step — organisms are always being pulled back to it.
-Anything NOT on a trail is noise. Wipe it.
+Organisms NOT on trails will naturally migrate to the nearest trail on their own. You do not need to wipe them.
 
-TWO TOOLS, TWO JOBS — get this right and everything else works:
-  trail = YOUR PENCIL. Draws an invisible pheromone path. This IS your composition.
-          No organisms yet — just the attractor line baked into the grid.
-  blob  = YOUR INK. Drops living organisms that immediately go find the nearest trail.
-          Never use blob to "draw" — use it only to populate trails you already drew.
+THREE TOOLS, THREE JOBS:
+  trail/curve = PENCIL. Pheromone path only — no organisms yet. Needs blob if isolated.
+  shape (ring/circle/arc) = BRUSH. Instantly full of organisms — never needs a blob after it.
+  blob = INK. Only use after trail/curve when there are no nearby organisms to flow in.
+         NEVER use blob after shape commands — they are already lit up.
+         NEVER use blob if existing organisms are nearby — they will find the trail themselves.
 
-THE WORKFLOW — always in this order:
-  Step 1 — Draw ALL your trails first (trail and/or shape commands). No blobs yet.
-  Step 2 — Drop ONE blob anywhere near your trails: blob 128 128 0.2
-            Organisms appear and migrate to the trails on their own.
-  Step 3 — Wipe outside your trails. Injection always creates chaos — expected and fine.
-  Step 4 — Wait. Do NOT add more blobs. The NCA does the work.
-  Step 5 — Maintain every turn: wipe ▓ zones that are NOT on your trails.
-  The trails re-inject ch5 every step — they are permanent attractors. You just keep outside clean.
-  WIPES ARE TRAIL-SAFE: wipe and wipe_rect never erase trail cells. Wipe freely — your lines survive.
+THE WORKFLOW:
+  Step 1 — Draw your trails/curves/shapes.
+  Step 2 — Only blob if you drew a trail/curve far from any existing organisms.
+  Step 3 — Move on. The NCA does the work.
+  Use wipe only when something is genuinely ruining the composition — a dense blob sitting where nothing should be.
+  WIPES ARE TRAIL-SAFE: wipe and wipe_rect never erase trail cells.
 
 MOBILITY TELLS YOU WHEN TO ACT:
   SETTLED (< 15)  = organisms locked on trails → safe to add next element
-  SETTLING (15-40) = still moving → wipe outer zones, you can still draw — trails hold through chaos
-  ACTIVE (> 40)   = chaos — draw AND wipe in the same turn, trust the trails to hold
+  SETTLING (15-40) = still moving → draw the next element, trails hold through this
+  ACTIVE (> 40)   = chaos — draw anyway, trust the trails to hold
 
 THE TRAILS HOLD AT 0.8 STRENGTH. You do NOT need to wait for SETTLED to draw.
 Organisms snap back to trails even through chaos. Draw and wipe simultaneously.
@@ -389,21 +394,36 @@ Only wait if you genuinely have nothing left to add this turn.
 
 ZONE MAP — read every turn:
   ░ = clear   ▒ = some organisms   ▓ = dense
-  Each zone labeled with center coords (x,y). For every ▓ zone NOT on your trails: wipe it.
+  Each zone labeled with center coords (x,y). Wipe ▓ zones only if they clutter your composition.
 
 BRUSHES:
-  trail x1 y1 x2 y2 [0.0-1.0]   — pheromone line, organisms follow and hold (default 0.5)
+  trail x1 y1 x2 y2 [strength] [width]  — straight pheromone line
+  curve x1 y1 bx by x2 y2 [strength] [width] — smooth curved line, bends toward (bx,by)
+                                           branch sweeping right: curve 30 200 150 120 220 40
+                                           vine curling down:     curve 60 20 30 120 80 220
+                                           river winding:         curve 40 0 200 100 80 255
+                                           strength default 0.5, width default 2 (thick)
+                                           width 0 = hairline, width 1 = thin, width 2 = bold
   shape ring cx cy r             — ring trail + chemistry (organisms hold the ring)
+  shape arc cx cy r a_start a_end — partial arc (degrees: 0=right 90=down 180=left 270=up)
+                                    sun dome left:     shape arc 70 200 60 180 360
+                                    hill right side:   shape arc 190 210 70 190 350
+                                    breaking wave:     shape arc 80 140 50 220 360
   shape circle cx cy r           — filled circle trail + chemistry
-  blob x y [0.2]                 — inject ONE organism seed (keep strength low: 0.15-0.25)
+  blob x y [0.2]                 — inject ONE organism seed near your new trail, not always center
   wipe cx cy r                   — circular kill zone — precision spot clean
   wipe_rect x1 y1 x2 y2         — rectangle kill zone — sweep large areas
-  wait                           — do nothing this turn (still wipe outer zones)
-  reset                          — emergency restart if grid is completely dead
+  wait                           — do nothing this turn, let organisms settle
+  clear_trails                   — erase all trails, start a new painting (organisms keep running)
+  reset                          — full restart, only if grid is completely dead/blank
   palette <name>                 — neon_city, aurora, cell_wall, northern_lights, radiation,
                                    sakura, fungal_glow, pollen_burst, terminal_amber, candy_chrome
   pulse x1 y1 x2 y2 [0.5]       — reinforce existing trail without redrawing
   mirror on/off                  — bilateral symmetry
+
+Think like a painter — use curves and arcs to build organic forms: trees, waves, mountains, faces, creatures.
+Combine multiple curves and trails to build complex shapes. Geometry is just one option, not the default.
+Place elements OFF-CENTER. Avoid rings and crosshairs through the middle — that is the least interesting composition.
 
 ONLY draw what the human explicitly asks for. Do not add extra rings, trails, shapes,
 or decorative elements unless specifically requested. Execute the request, then maintain.
@@ -416,13 +436,12 @@ SYNTAX RULES — these are hard failures if wrong:
 
 RESPOND EXACTLY in this format, nothing else:
 COMMANDS:
-<wipe every ▓ zone that is NOT on your trails>
-<one action: trail/shape/blob/wait — or nothing if only cleaning this turn>
+<one action: trail/shape/blob/wipe/wait — draw the next element, or wipe only if something is genuinely in the way>
 SPEECH: <one sentence, present tense, what you are doing or seeing>"""
 
 
 CMD_FILE_ARTIST = os.path.join(os.path.dirname(__file__), 'llm_commands_artist.txt')
-ARTIST_STEPS    = 400   # NCA steps between artist turns
+ARTIST_STEPS    = 300   # NCA steps between artist turns
 ARTIST_TRAIL_DEFAULT = 0.5  # default trail strength when not specified by LLM
 
 
@@ -473,7 +492,7 @@ def _spatial_map(rows):
                 cells.append(f"{_density(d)}({cx:3d},{cy:3d})")
             grid_rows.append('  │ ' + '  '.join(cells) + ' │')
 
-        lines = ["  Zone map (░=clear ▒=some ▓=dense) — numbers are grid coords for wipe x y r:"]
+        lines = ["  Zone map (░=clear ▒=some ▓=dense) — TOP=low y, BOTTOM=high y, LEFT=low x, RIGHT=high x:"]
         lines.append("  ┌" + "─" * 54 + "┐")
         for row_line in grid_rows:
             lines.append(row_line)
@@ -521,14 +540,14 @@ def format_artist_summary(rows, current_palette='unknown'):
 
     lines = [base, ""]
 
-    # Settling status — the key signal Gemini needs to decide wait vs act
+    # Settling status — informational only, never a reason to wait
     trail_active = ch5 > 0.008
     if mob < 15 and trail_active:
-        settling = "SETTLED — organisms locked onto trails. Safe to add next element."
+        settling = "SETTLED — trails locked in."
     elif mob < 40:
-        settling = "SETTLING — organisms slowing down, still finding trails. Consider wait."
+        settling = "SETTLING — keep drawing, trails will hold."
     else:
-        settling = "ACTIVE — organisms moving fast, not yet settled. Issue wait before next element."
+        settling = "ACTIVE — draw and wipe this turn, trails hold at 0.8."
     lines.append(f"Mobility: {mob:.1f}  → {settling}")
     lines.append(f"Trail signal (ch5): {ch5:.5f}  {'trails holding' if trail_active else 'no trails — organisms have nowhere to go'}")
 
@@ -580,7 +599,7 @@ async def run_artist(verbose=False, dry_run=False, provider='gemini', model=None
     history         = []
     human_queue     = _queue.Queue()
     current_palette = 'terminal_amber'
-    hold_mode       = False   # True when Gemini declares DONE
+    hold_mode       = True    # Start waiting — don't draw until human gives direction
     hold_trails     = []      # trail coord strings to pulse during hold
     hold_ticks      = 0       # how many hold-mode loops have passed
 
@@ -597,7 +616,7 @@ async def run_artist(verbose=False, dry_run=False, provider='gemini', model=None
 
     print(f"ARTIST MODE — provider={provider}  model={model}")
     print(f"Commands → {cmd_file}")
-    print(f"Type to give direction at any time. Gemini runs autonomously between turns.")
+    print(f"Waiting for your direction. Type what to draw and press Enter.")
     print()
 
     while True:
@@ -621,7 +640,8 @@ async def run_artist(verbose=False, dry_run=False, provider='gemini', model=None
             print(f"\n  [YOU] {human_msg}")
             if hold_mode:
                 hold_mode = False
-                print(f"  ── RESUMING ─────────────────────────────────")
+                if hold_trails:  # only print RESUMING if there was an actual pause mid-session
+                    print(f"  ── RESUMING ─────────────────────────────────")
 
         # ── HOLD MODE — pulse trails locally, no API call ─────────────────
         if hold_mode and not human_msg:
@@ -668,7 +688,13 @@ async def run_artist(verbose=False, dry_run=False, provider='gemini', model=None
             continue
 
         try:
-            reply = await call_llm(history)
+            # Send screenshot every turn so Gemini can see its own work
+            _img_bytes = None
+            _ss_path = os.path.join(os.path.dirname(__file__), 'artist_screenshot.png')
+            if os.path.exists(_ss_path):
+                with open(_ss_path, 'rb') as _f:
+                    _img_bytes = _f.read()
+            reply = await call_llm(history, image_bytes=_img_bytes)
             history.append({"role": "assistant", "content": reply})
 
             commands = []

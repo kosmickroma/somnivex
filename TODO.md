@@ -1,122 +1,69 @@
-# Somnivex — TODO
+# Somnivex — TODO (updated 2026-03-19)
 
-## Palettes / Color System
+## Immediate — Priority
 
-### Procedural palette generation
-- Generate palettes algorithmically at runtime instead of only hand-picked ones
-- Random hue rotation with locked saturation/brightness relationships
-- Complementary, triadic, and analogous color theory schemes
-- Perlin-noise-driven palette that slowly shifts hue over time (independent of regime drift)
-- Palette seeded from era seed number (every era gets its own unique colors, fully reproducible)
-
-### Richer palette structure
-- 8-color palettes instead of 4 (smoother gradations, more depth)
-- Non-linear interpolation curves (ease-in, ease-out, sinusoidal) instead of linear lerp
-- Per-channel gamma adjustment so darks stay dark and brights actually bloom
-
-### Reactive palettes
-- Saturation boost when reaction rate is high (A*B² spikes)
-- Hue shift when pattern movement is fast vs slow (tie to freeze-detector delta)
-- Palette "pressure" — the current regime nudges palette hue toward a canonical color
+- [ ] Add LICENSE file to repo (CC BY-NC 4.0 recommended)
+- [ ] File ArXiv preprint — draft is in kktodo/preprint_draft.md, needs name filled in
+- [ ] Decide: keep public repo or move to private for next phase
 
 ---
 
-## Render Modes
+## LLM Artist — Next Steps
 
-- **Curl field** — visualize the rotational component of the B gradient (spirals become vortex rings)
-- **Phase portrait** — plot A vs B as a 2D scatter mapped to color (shows limit cycles clearly)
-- **Laplacian** — second derivative of B (highlights curvature, not just edges)
-- **Time-averaged** — blend last N frames together (ghosting effect, shows motion trails)
-
----
-
-## Visual Effects
-
-- **Trails / motion blur** — blend current frame with weighted previous frame (ghosting)
-- **Distortion** — UV warp based on gradient field (ripple/heat-haze look)
-- **Palette inversion** — flip the heat map midway through (inverts which chemical is "bright")
-- **Dithering** — ordered or Floyd-Steinberg dither before display (crisp pixel-art feel)
-- **Lens flare** — additive streaks from the brightest points
+- [ ] Test vision feedback quality — does Gemini's speech show it's actually reading the canvas?
+- [ ] Add `erase_trail cx cy r` — selective trail erasure (currently N key wipes everything)
+- [ ] Tune ARTIST_STEPS — currently 300, may want to adjust based on vision feedback latency
+- [ ] Session recording — clean 5-min video of full artist session with vision feedback active
+- [ ] Try autonomous mode — "draw whatever you want" with vision, see if compositions improve
 
 ---
 
-## Simulation
+## LLM Artist — Known Issues
 
-- **More GS regimes** — mine the full xmorphia / Munafo catalog for more named (f, k) pairs
-- **Anisotropic diffusion** — vary Da/Db spatially or directionally (patterns gain directionality)
-- **Noise field overlay** — add slow Perlin noise to f/k spatially (breaks global symmetry)
-- **Wrap vs. clamp boundaries** — currently wraps; clamped edges create interesting border effects
-
----
-
-## Phase 2 — NCA Physics Training (current focus)
-
-Goal: teach the NCA Gray-Scott mechanics via one-step prediction, then let it run free.
-
-### Architecture (decided)
-- 16 channels: 0=A (food), 1=B (predator), 2-13=hidden, 14=f control, 15=k control
-- 4 fixed perception kernels: Identity, Sobel X, Sobel Y, Laplacian → 64-dim input to net
-- UpdateNet: Dense(128, tanh) → Dense(16, zero-init) — residual delta, no alive mask
-- Fire rate 0.5 (stochastic async updates, per Growing NCA paper)
-
-### Training (pool-based — key insight from Mordvintsev 2020)
-- Pool of 512 live GS states (A, B, f, k snapshots from random regimes)
-- Each step: sample 32 from pool → run NCA 1 step → compare to actual GS 1 step → backprop → write back
-- Loss: MSE on channels 0 and 1 (A and B) only
-- Also inject small noise during training and penalize deviation (persistence loss)
-- Gradient normalization: per-variable L2 norm (prevents late-training spikes)
-- Train until: loss plateau + visual shadow check + 10-min free run test passes
-
-### Files to write (kktodo/)
-- [x] 01_nca_model.md — full rewrite of nca/model.py
-- [ ] 02_nca_train.md — new file nca/train.py (training loop)
-- [ ] 03_main_integration.md — plug trained NCA into main.py
+- Gemini still sometimes defaults to centered compositions despite off-center prompt fixes
+- Blob spam partially fixed — `shape` commands no longer need blobs but Gemini still sometimes adds them
+- Spatial placement of complex scenes (mountains, landscapes) still approximate without vision
+- `wait` spam mostly fixed but still appears occasionally
 
 ---
 
-## Phase 3 — Dream Chamber (bolt-on after Phase 2 works)
+## Blind Stigmergy / Multi-Agent
 
-Background process that runs inference-time novelty search:
-- Fork 64 mini 64×64 grids with random control channel nudges
-- Run 200 steps each, score with: entropy of B channel + temporal delta (3 lines of JAX)
-- Blend top-4 winning control vectors back into main grid smoothly
-- Save winning control vectors as .npy "genetic memory" files — reloadable later
-- Connects to preference model: scoring biased toward what user has liked
+- [ ] Record a clean second Blind Stigmergy Battle video (first one is on YouTube)
+- [ ] Try 3-agent battle (Claude + Gemini + third agent)
+- [ ] Document the battle protocol more formally for the preprint
 
 ---
 
-## Phase 4 — Preference Learning
+## Research / Publication
 
-- Collect ~200 U/D ratings (currently at 0 — fresh start as of 2026-03-12)
-- MLP (Flax) trained on ratings_log.json
-- Input: (regime, palette, render_mode, effect) as one-hot
-- Output: predicted like probability
-- Biases NCA control channel nudges toward liked styles (not just GS regime picks)
-- Retrain incrementally every N new ratings
-
----
-
-## Phase 5 — Ecosystem Layer (downstream, after Phase 3)
-
-Run 2 specialist NCAs on the same grid, sharing A/B channels:
-- Specialist A: trained on GS spirals/waves
-- Specialist B: trained on GS spots/mitosis
-- Each updates only its own hidden channels (2-13), competing for shared A/B channels
-- Add resource budget control channel — weak specialist patterns get recycled
-- Start with 2 species, not 4
+- [ ] Edit preprint_draft.md — fill in real name, verify references
+- [ ] Create ArXiv account, get endorsement from CS/ALife researcher
+- [ ] LinkedIn warm-up posts (battle video first, then artist video)
+- [ ] Upload remaining videos unlisted before going public
+- [ ] Reach out to Mordvintsev, Adamatzky after ArXiv is filed
 
 ---
 
-## Screensaver / System
+## NCA System — Nice to Have
 
-- GNOME idle detection — auto-launch on idle, kill on any input
-- Separate left/right screen rendering (different palette+mode per monitor)
-- Config hot-reload — change config.py values without restarting
+- [ ] Physarum grammar experiment — compare ch4 behavior vs lenia_100000.pkl
+- [ ] Expand behavioral classifier from 4 states to 8 (need more diverse training data)
+- [ ] GNOME idle detection for true screensaver mode
+- [ ] Gallery auto-save — capture visually interesting moments to disk automatically
 
 ---
 
-## Gallery (Phase 6)
+## Completed ✓
 
-- Auto-save PNG + JSON at visually interesting moments
-- Lightweight review app (keyboard yes/no through saved pieces)
-- Rated pieces feed back into preference model
+- [x] NCA v2 training — 3 Lenia species + GS, hidden channel noise, continuous ch13
+- [x] LLM bridge — Gemini reading and writing to live NCA grid
+- [x] Artist mode — full brush toolkit (trail, curve, arc, shape, wipe, blob, palette, mirror)
+- [x] Vision feedback — screenshot sent to Gemini every turn
+- [x] Blind Stigmergy Battle — Claude vs Gemini fighting over live NCA (YouTube: youtu.be/UgWdtZdLKdo)
+- [x] Persistent compositions — LLM programs persist after disconnect (KK+X, bullseye+spiderweb)
+- [x] speak.py — clean director input terminal for video recording
+- [x] GS-only grammar experiment — flat hidden channels confirmed (multi-physics required)
+- [x] Behavioral grammar — 8-state k-means, transition matrix, state_classifier.pkl
+- [x] Walls/doors — interactive boundary drawing (W key)
+- [x] kktodo/ removed from public repo

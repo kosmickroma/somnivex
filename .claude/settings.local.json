@@ -64,7 +64,9 @@
       "Bash(ls -t /home/kk/projects/ml/somnivex/nca/saves/*.pkl)",
       "Bash(python3 -:*)",
       "Bash(ls -lt /home/kk/projects/ml/somnivex/nca/logs/features_*.csv)",
-      "Bash(git -C /home/kk/projects/ml/somnivex show 534b5de --stat)"
+      "Bash(git -C /home/kk/projects/ml/somnivex show 534b5de --stat)",
+      "Bash(git restore:*)",
+      "Bash(git rm:*)"
     ]
   }
 }

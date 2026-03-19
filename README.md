@@ -33,6 +33,8 @@ A compact NCA (17,000 parameters) trained simultaneously on three incompatible L
 
 **The junction ring:** Gemini added this without being asked. It understood from the physics description that where trails cross, organisms accumulate and the structure is most vulnerable to chaos. It made a structural decision — protect the most important point — and executed it with a `shape ring` command. This is the first observed case of an LLM making an unsolicited architectural decision about a living system based on understanding of its physics.
 
+**[▶ Watch on YouTube](https://youtu.be/UgWdtZdLKdo)**
+
 Bridge code: [`nca/llm_bridge.py`](nca/llm_bridge.py) (`--artist --provider gemini`)
 Run: `python nca/run_free.py --physarum --artist --research` + `python nca/llm_bridge.py --artist --provider gemini`
 

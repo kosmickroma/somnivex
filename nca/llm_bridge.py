@@ -380,8 +380,12 @@ THE WORKFLOW — always in this order:
 
 MOBILITY TELLS YOU WHEN TO ACT:
   SETTLED (< 15)  = organisms locked on trails → safe to add next element
-  SETTLING (15-40) = still moving → wipe outer zones, do not add anything new
-  ACTIVE (> 40)   = chaos from recent injection → wipe, wipe, wipe, then wait
+  SETTLING (15-40) = still moving → wipe outer zones, you can still draw — trails hold through chaos
+  ACTIVE (> 40)   = chaos — draw AND wipe in the same turn, trust the trails to hold
+
+THE TRAILS HOLD AT 0.8 STRENGTH. You do NOT need to wait for SETTLED to draw.
+Organisms snap back to trails even through chaos. Draw and wipe simultaneously.
+Only wait if you genuinely have nothing left to add this turn.
 
 ZONE MAP — read every turn:
   ░ = clear   ▒ = some organisms   ▓ = dense
@@ -400,6 +404,9 @@ BRUSHES:
                                    sakura, fungal_glow, pollen_burst, terminal_amber, candy_chrome
   pulse x1 y1 x2 y2 [0.5]       — reinforce existing trail without redrawing
   mirror on/off                  — bilateral symmetry
+
+ONLY draw what the human explicitly asks for. Do not add extra rings, trails, shapes,
+or decorative elements unless specifically requested. Execute the request, then maintain.
 
 SYNTAX RULES — these are hard failures if wrong:
   trail needs EXACTLY 4 numbers: trail x1 y1 x2 y2     (strength is optional 5th)
@@ -596,10 +603,19 @@ async def run_artist(verbose=False, dry_run=False, provider='gemini', model=None
     while True:
         await asyncio.sleep(ARTIST_STEPS / 60)
 
-        # Check for human input
+        # Check for human input — stdin queue OR speak.py file
         human_msg = None
         while not human_queue.empty():
             human_msg = human_queue.get()
+        _speak_file = os.path.join(os.path.dirname(__file__), 'human_input.txt')
+        try:
+            if os.path.exists(_speak_file):
+                _txt = open(_speak_file).read().strip()
+                if _txt:
+                    human_msg = _txt
+                    open(_speak_file, 'w').write('')  # clear after reading
+        except Exception:
+            pass
 
         if human_msg:
             print(f"\n  [YOU] {human_msg}")

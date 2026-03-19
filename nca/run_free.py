@@ -1253,7 +1253,7 @@ def run():
                 # ── Spatial brush commands ─────────────────────────────────
                 nonlocal trail_mask, jtrail, trail_strength, wall_mask, jwall
                 nonlocal trail_drift_x, trail_drift_y
-                nonlocal palette_idx, palette_target, render_mode, render_mode_idx
+                nonlocal palette_idx, palette_target, palette_blend, render_mode, render_mode_idx
                 nonlocal ch5_tint_color, artist_mirror, show_ch5_overlay
                 # Strip any non-numeric words Gemini inserts (e.g. "strength 0.7" → "0.7")
                 _parts = [p for p in _cmd.strip().split() if p not in ('strength', 'at', 'with', 'to')]
@@ -1437,6 +1437,7 @@ def run():
                         if _pname in PALETTES:
                             palette_idx    = palette_names.index(_pname)
                             palette_target = np.array(PALETTES[_pname], dtype=np.float32)
+                            palette_blend  = 1   # trigger crossfade
                             print(f"  [{_label}] palette → {_pname}")
                         else:
                             print(f"  [{_label}] unknown palette: {_pname}. Options: {', '.join(palette_names)}")

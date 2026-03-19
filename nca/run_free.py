@@ -46,6 +46,7 @@ RESEARCH_PALETTE  = 'neon_city'
 CMD_FILE          = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'llm_commands.txt')
 CMD_FILE_KEEPER   = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'llm_commands_keeper.txt')
 CMD_FILE_DESTROYER= os.path.join(os.path.dirname(os.path.abspath(__file__)), 'llm_commands_destroyer.txt')
+CMD_FILE_ARTIST   = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'llm_commands_artist.txt')
 TURN_FILE         = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'battle_turn.txt')
 CMD_POLL_EVERY    = 30   # frames between command file checks
 BATTLE_TURN_STEPS = 500   # NCA steps between battle turns (~8s on GPU)
@@ -124,6 +125,9 @@ CHECKPOINT = os.path.join(
 )
 GS_CHECKPOINT = os.path.join(
     os.path.dirname(__file__), 'checkpoints', 'gs_only_100000.pkl'
+)
+PHYSARUM_CHECKPOINT = os.path.join(
+    os.path.dirname(__file__), 'checkpoints', 'physarum_100000.pkl'
 )
 
 # Physics bit — 0.0 = GS mode, 1.0 = Lenia mode.
@@ -345,16 +349,31 @@ def run():
     parser = argparse.ArgumentParser()
     parser.add_argument('--gs', action='store_true',
                         help='Load original GS-only checkpoint for comparison')
+    parser.add_argument('--physarum', action='store_true',
+                        help='Load GS+Physarum checkpoint (physarum_100000.pkl)')
     parser.add_argument('--free', action='store_true',
                         help='Free channel experiment: stop injecting ch13/14/15 after warmup')
     parser.add_argument('--research', action='store_true',
                         help='Research mode: lock display to cell_wall+edges+vignette, enable auto-logging and state HUD')
+    parser.add_argument('--artist', action='store_true',
+                        help='Artist mode: poll llm_commands_artist.txt for spatial brush commands from LLM painter')
+    parser.add_argument('--battle', action='store_true',
+                        help='Battle mode: enable keeper/destroyer turn polling')
     args = parser.parse_args()
     global RESEARCH_MODE
     RESEARCH_MODE = args.research
+    ARTIST_MODE   = args.artist
+    BATTLE_MODE   = args.battle
 
-    ckpt = GS_CHECKPOINT if args.gs else CHECKPOINT
-    label = "GS-only (params_050000)" if args.gs else "Lenia-fused (lenia_050000)"
+    if args.gs:
+        ckpt  = GS_CHECKPOINT
+        label = "GS-only (gs_only_100000)"
+    elif args.physarum:
+        ckpt  = PHYSARUM_CHECKPOINT
+        label = "GS+Physarum (physarum_100000)"
+    else:
+        ckpt  = CHECKPOINT
+        label = "Lenia-fused (lenia_100000)"
     free_channels = args.free
     FREE_WARMUP   = 2000   # steps before releasing control channels
 
@@ -447,9 +466,9 @@ def run():
     render_mode      = NCA_RENDER_MODES[render_mode_idx]
     effect           = NCA_EFFECTS[effect_idx]
     # In research mode push auto-rotation far out so display stays locked
-    next_mode_change   = np.random.randint(RENDER_MODE_CHANGE_MIN, RENDER_MODE_CHANGE_MAX) if not RESEARCH_MODE else 999999999
-    next_effect_change = np.random.randint(EFFECT_CHANGE_MIN, EFFECT_CHANGE_MAX)           if not RESEARCH_MODE else 999999999
-    next_palette_change = np.random.randint(PALETTE_CHANGE_MIN, PALETTE_CHANGE_MAX) if not RESEARCH_MODE else 999999999
+    next_mode_change   = np.random.randint(RENDER_MODE_CHANGE_MIN, RENDER_MODE_CHANGE_MAX) if not (RESEARCH_MODE or ARTIST_MODE) else 999999999
+    next_effect_change = np.random.randint(EFFECT_CHANGE_MIN, EFFECT_CHANGE_MAX)           if not (RESEARCH_MODE or ARTIST_MODE) else 999999999
+    next_palette_change = np.random.randint(PALETTE_CHANGE_MIN, PALETTE_CHANGE_MAX) if not (RESEARCH_MODE or ARTIST_MODE) else 999999999
 
     # ── Research: load classifier + open log file ──────────────────────────
     classifier        = None
@@ -467,9 +486,25 @@ def run():
     wall_mode    = False
     wall_mask    = np.zeros((GRID_H, GRID_W), dtype=bool)
     wall_drawing = False   # True while mouse button held in wall mode
+    show_ch5_overlay = False  # X key — cyan heatmap of ch5 spatial values
+    ch5_tint_color   = (0, 220, 255)  # RGB tint for ch5 overlay — artist can change with trailcolor command
+    artist_mirror    = False           # mirror mode — paints symmetrically across vertical axis
     wall_erase   = False   # True for right-click erase
     jwall        = jnp.zeros((GRID_H, GRID_W), dtype=bool)
     WALL_BRUSH   = 2       # brush radius in grid cells
+
+    # ── ch5 trail injection (Y key) ───────────────────────────────────────────
+    trail_mode    = False
+    trail_drawing = False
+    trail_erase   = False
+    trail_mask    = np.zeros((GRID_H, GRID_W), dtype=bool)
+    trail_strength = 0.8    # injected ch5 value — [ / ] to adjust
+    TRAIL_BRUSH   = 3        # brush radius in grid cells
+    jtrail        = jnp.zeros((GRID_H, GRID_W), dtype=bool)
+    # Drift — LLM can issue drift dx dy to shepherd organisms along a moving trail
+    trail_drift_x  = 0      # pixels to shift trail per DRIFT_INTERVAL steps
+    trail_drift_y  = 0
+    DRIFT_INTERVAL = 30     # NCA steps between each drift shift
 
     # ── Attractor seed (click-to-place) ───────────────────────────────────────
     # V key cycles which state to paint. Mouse click stamps that state's hidden
@@ -481,6 +516,8 @@ def run():
     #   zero_out  — if True, zero all hidden channels in the region (death seed)
     SEED_RADIUS = 48   # half-size of stamp region — needs ~10% of grid to compete with attractor
     SEED_STATES = [4, 1, 5, 3]   # Rich, Stable, Predator, Near Extinction
+    BLOB_RADIUS   = 4     # single-blob stamp — small enough to seed exactly one ring
+    blob_strength = 0.25  # B injection value — shift+[ / shift+] to adjust
     # Each seed writes to the VISIBLE chemistry (A, B) AND hidden channels.
     # Hidden-only injection gets swamped in a few steps — need to set the actual chemistry.
     # a_val/b_val: fixed values to write into A/B in the region (None = don't touch)
@@ -724,6 +761,47 @@ def run():
                     jwall = jnp.zeros((GRID_H, GRID_W), dtype=bool)
                     print("Walls cleared")
 
+                if event.key == pygame.K_x:
+                    show_ch5_overlay = not show_ch5_overlay
+                    print(f"ch5 overlay: {'ON' if show_ch5_overlay else 'OFF'}")
+
+                if event.key == pygame.K_y:
+                    trail_mode = not trail_mode
+                    print(f"Trail paint: {'ON (drag to paint ch5, right-click erase, [/] strength)' if trail_mode else 'OFF'}")
+
+                if event.key == pygame.K_LEFTBRACKET:
+                    mods = pygame.key.get_mods()
+                    if mods & pygame.KMOD_SHIFT:
+                        blob_strength = max(0.05, blob_strength - 0.05)
+                        print(f"Blob strength: {blob_strength:.2f}")
+                    else:
+                        trail_strength = max(0.005, trail_strength - 0.005)
+                        print(f"Trail strength: {trail_strength:.3f}")
+
+                if event.key == pygame.K_RIGHTBRACKET:
+                    mods = pygame.key.get_mods()
+                    if mods & pygame.KMOD_SHIFT:
+                        blob_strength = min(0.5, blob_strength + 0.05)
+                        print(f"Blob strength: {blob_strength:.2f}")
+                    else:
+                        trail_strength = min(1.0, trail_strength + 0.005)
+                        print(f"Trail strength: {trail_strength:.3f}")
+
+                if event.key == pygame.K_n:
+                    trail_mask[:] = False
+                    jtrail = jnp.zeros((GRID_H, GRID_W), dtype=bool)
+                    print("Trail cleared")
+
+                if event.key == pygame.K_k:
+                    # Nuke grid to extinction — A=1, B=0, hidden channels zeroed
+                    # Trail and walls are preserved so you can drop blobs into a prepared arena
+                    grid = grid.at[:, :, 0].set(1.0)
+                    grid = grid.at[:, :, 1].set(0.0)
+                    for _chi in range(2, 14):
+                        grid = grid.at[:, :, _chi].set(0.0)
+                    print("K: EXTINCTION — grid wiped. Drop a blob with B key + click.")
+
+
                 if event.key == pygame.K_c:
                     # Directional hidden channel injection toward target cluster centroid.
                     # Each press cycles the target state, then steers ch2/ch4/ch5 toward it.
@@ -803,9 +881,49 @@ def run():
 
             if event.type == pygame.MOUSEBUTTONUP:
                 wall_drawing = False
+                trail_drawing = False
+
+            # ── Mouse: trail paint (left) or blob drop (right) ────────────────
+            if event.type == pygame.MOUSEBUTTONDOWN and trail_mode and event.button == 3:
+                # Right-click in trail mode = drop a single blob
+                mx, my = event.pos
+                gx = int(mx * GRID_W / DISPLAY_W)
+                gy = int(my * GRID_H / DISPLAY_H)
+                r  = BLOB_RADIUS
+                y0, y1 = max(0, gy - r), min(GRID_H, gy + r)
+                x0, x1 = max(0, gx - r), min(GRID_W, gx + r)
+                h, w = y1 - y0, x1 - x0
+                cy, cx = h / 2, w / 2
+                yy, xx = np.ogrid[:h, :w]
+                dist = np.sqrt((yy - cy)**2 + (xx - cx)**2)
+                inside = dist <= r
+                # A stays near 1 minus blob_strength so we don't flood the grid
+                grid = grid.at[y0:y1, x0:x1, 0].set(jnp.array(np.where(inside, 1.0 - blob_strength, np.array(grid[y0:y1, x0:x1, 0]))))
+                grid = grid.at[y0:y1, x0:x1, 1].set(jnp.array(np.where(inside, blob_strength, np.array(grid[y0:y1, x0:x1, 1]))))
+                print(f"Blob dropped at ({gx},{gy})  B={blob_strength:.2f}")
+
+            if event.type == pygame.MOUSEBUTTONDOWN and trail_mode and event.button == 1:
+                trail_drawing = True
+                trail_erase   = False
+                mx, my = event.pos
+                gx = int(mx * GRID_W / DISPLAY_W)
+                gy = int(my * GRID_H / DISPLAY_H)
+                y0 = max(0, gy - TRAIL_BRUSH); y1 = min(GRID_H, gy + TRAIL_BRUSH + 1)
+                x0 = max(0, gx - TRAIL_BRUSH); x1 = min(GRID_W, gx + TRAIL_BRUSH + 1)
+                trail_mask[y0:y1, x0:x1] = not trail_erase
+                jtrail = jnp.array(trail_mask)
+
+            if event.type == pygame.MOUSEMOTION and trail_drawing:
+                mx, my = event.pos
+                gx = int(mx * GRID_W / DISPLAY_W)
+                gy = int(my * GRID_H / DISPLAY_H)
+                y0 = max(0, gy - TRAIL_BRUSH); y1 = min(GRID_H, gy + TRAIL_BRUSH + 1)
+                x0 = max(0, gx - TRAIL_BRUSH); x1 = min(GRID_W, gx + TRAIL_BRUSH + 1)
+                trail_mask[y0:y1, x0:x1] = not trail_erase
+                jtrail = jnp.array(trail_mask)
 
             # ── Mouse click — stamp attractor seed ────────────────────────────
-            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not wall_mode:
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not wall_mode and not trail_mode:
                 mx, my = event.pos
                 # Map screen → grid coordinates (grid is scaled to fill display)
                 gx = int(mx * GRID_W / DISPLAY_W)
@@ -874,6 +992,18 @@ def run():
             if np.any(wall_mask):
                 grid = grid.at[:, :, CH_A].set(jnp.where(jwall, 1.0, grid[:, :, CH_A]))
                 grid = grid.at[:, :, CH_B].set(jnp.where(jwall, 0.0, grid[:, :, CH_B]))
+            # Trail injection — force ch5 to trail_strength on painted cells every step
+            if np.any(trail_mask):
+                grid = grid.at[:, :, 5].set(jnp.where(jtrail, trail_strength, grid[:, :, 5]))
+            # Trail drift — shift trail toward target direction every DRIFT_INTERVAL steps
+            if (trail_drift_x != 0 or trail_drift_y != 0) and step_count % DRIFT_INTERVAL == 0:
+                trail_mask = np.roll(trail_mask, shift=(trail_drift_y, trail_drift_x), axis=(0, 1))
+                # Zero out wrapped edges so trail doesn't teleport
+                if trail_drift_x > 0:  trail_mask[:, :trail_drift_x] = False
+                elif trail_drift_x < 0: trail_mask[:, trail_drift_x:] = False
+                if trail_drift_y > 0:  trail_mask[:trail_drift_y, :] = False
+                elif trail_drift_y < 0: trail_mask[trail_drift_y:, :] = False
+                jtrail = jnp.array(trail_mask)
             step_count += 1
 
         # ── Research: auto feature logging + state HUD + transition saves ─
@@ -919,6 +1049,18 @@ def run():
                              f"  blobs={int(_feat[8])}"
                              f"  ch2={_feat[5]:.4f}"
                              f"  ch4={_feat[6]:.4f}")
+            # Write 4×4 zone density map for artist bridge
+            if ARTIST_MODE:
+                import json as _json
+                _a_z = _grid_np[:,:,0]
+                _zones = {}
+                for _zr in range(4):
+                    for _zc in range(4):
+                        _zone_a = _a_z[_zr*64:(_zr+1)*64, _zc*64:(_zc+1)*64]
+                        _zones[f'{_zr}{_zc}'] = round(float(np.mean(_zone_a < 0.80)), 3)
+                _zone_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'artist_state.json')
+                with open(_zone_path, 'w') as _azf:
+                    _json.dump({'zones': _zones, 'step': step_count}, _azf)
 
         # ── Spatial field phase drift ─────────────────────────────────────
         # Advance all four phases by their individual velocities each frame.
@@ -1047,8 +1189,45 @@ def run():
                 print(f"Solid screen (std={b_std:.4f}) → reseed #{auto_nudges}  f={f:.4f} k={k:.4f}")
 
         # ── LLM command executor (shared by single-agent and battle mode) ──
+        def _bresenham_cells(x0, y0, x1, y1, brush=2):
+            """Return list of (y,x) grid cells along a line with given brush radius."""
+            cells = set()
+            dx, dy = abs(x1-x0), abs(y1-y0)
+            sx = 1 if x0 < x1 else -1
+            sy = 1 if y0 < y1 else -1
+            err = dx - dy
+            cx, cy = x0, y0
+            while True:
+                for by in range(max(0,cy-brush), min(GRID_H,cy+brush+1)):
+                    for bx in range(max(0,cx-brush), min(GRID_W,cx+brush+1)):
+                        cells.add((by, bx))
+                if cx == x1 and cy == y1:
+                    break
+                e2 = 2 * err
+                if e2 > -dy:
+                    err -= dy; cx += sx
+                if e2 < dx:
+                    err += dx; cy += sy
+            return list(cells)
+
+        def _circle_cells(cx, cy, r):
+            """Return list of (y,x) cells within radius r of (cx,cy)."""
+            cells = []
+            for gy in range(max(0,cy-r), min(GRID_H,cy+r+1)):
+                for gx in range(max(0,cx-r), min(GRID_W,cx+r+1)):
+                    if (gy-cy)**2 + (gx-cx)**2 <= r*r:
+                        cells.append((gy,gx))
+            return cells
+
+        def _apply_mirror(fn):
+            """If artist_mirror is on, call fn for both original and mirrored coords."""
+            fn(False)
+            if artist_mirror:
+                fn(True)
+
         def _execute_llm_command(_cmd, _label='LLM'):
             nonlocal grid, f, k, f_field, k_field, jf_field, jk_field, key, regime_idx
+            nonlocal step_count, auto_nudges
             if _cmd == 'inject_chaos':
                 _noise = jnp.array(np.random.uniform(-0.5, 0.5, (GRID_H, GRID_W, 12)).astype(np.float32))
                 grid = grid.at[:, :, 2:14].add(_noise)
@@ -1070,6 +1249,214 @@ def run():
                 jf_field = jnp.array(f_field)
                 jk_field = jnp.array(k_field)
                 print(f"  [{_label}] {_cmd} → {_rname}")
+            else:
+                # ── Spatial brush commands ─────────────────────────────────
+                nonlocal trail_mask, jtrail, trail_strength, wall_mask, jwall
+                nonlocal trail_drift_x, trail_drift_y
+                nonlocal palette_idx, palette_target, render_mode, render_mode_idx
+                nonlocal ch5_tint_color, artist_mirror, show_ch5_overlay
+                # Strip any non-numeric words Gemini inserts (e.g. "strength 0.7" → "0.7")
+                _parts = [p for p in _cmd.strip().split() if p not in ('strength', 'at', 'with', 'to')]
+                _brush = _parts[0] if _parts else ''
+
+                def _do_trail(mirror=False):
+                    if len(_parts) < 5: return
+                    x0,y0,x1,y1 = int(_parts[1]),int(_parts[2]),int(_parts[3]),int(_parts[4])
+                    strength = float(_parts[5]) if len(_parts) > 5 else 0.5
+                    if mirror:
+                        x0,x1 = GRID_W-1-x0, GRID_W-1-x1
+                    cells = _bresenham_cells(x0,y0,x1,y1, brush=2)
+                    _g = np.array(grid[:,:,5])
+                    for (gy,gx) in cells:
+                        _g[gy,gx] = strength
+                        trail_mask[gy,gx] = True
+                    grid.__class__  # touch nonlocal
+                    return _g, strength
+
+                if _brush == 'trail':
+                    _g = np.array(grid[:,:,5])
+                    if len(_parts) >= 5:
+                        x0,y0,x1,y1 = int(_parts[1]),int(_parts[2]),int(_parts[3]),int(_parts[4])
+                        strength = float(_parts[5]) if len(_parts) > 5 else 0.5
+                        for mirror in ([False,True] if artist_mirror else [False]):
+                            mx0,mx1 = (GRID_W-1-x0,GRID_W-1-x1) if mirror else (x0,x1)
+                            for (gy,gx) in _bresenham_cells(mx0,y0,mx1,y1,brush=2):
+                                _g[gy,gx] = strength
+                                trail_mask[gy,gx] = True
+                        grid = grid.at[:,:,5].set(jnp.array(_g))
+                        jtrail = jnp.array(trail_mask)
+                        print(f"  [{_label}] trail ({x0},{y0})→({x1},{y1}) str={strength:.2f}")
+
+                elif _brush == 'wall':
+                    if len(_parts) >= 5:
+                        x0,y0,x1,y1 = int(_parts[1]),int(_parts[2]),int(_parts[3]),int(_parts[4])
+                        for mirror in ([False,True] if artist_mirror else [False]):
+                            mx0,mx1 = (GRID_W-1-x0,GRID_W-1-x1) if mirror else (x0,x1)
+                            for (gy,gx) in _bresenham_cells(mx0,y0,mx1,y1,brush=2):
+                                wall_mask[gy,gx] = True
+                        jwall = jnp.array(wall_mask)
+                        print(f"  [{_label}] wall ({x0},{y0})→({x1},{y1})")
+
+                elif _brush == 'pulse':
+                    # Temporarily spike ch5 along a line — snap drifting organisms back
+                    if len(_parts) >= 5:
+                        x0,y0,x1,y1 = int(_parts[1]),int(_parts[2]),int(_parts[3]),int(_parts[4])
+                        strength = float(_parts[5]) if len(_parts) > 5 else 0.8
+                        _g = np.array(grid[:,:,5])
+                        for mirror in ([False,True] if artist_mirror else [False]):
+                            mx0,mx1 = (GRID_W-1-x0,GRID_W-1-x1) if mirror else (x0,x1)
+                            for (gy,gx) in _bresenham_cells(mx0,y0,mx1,y1,brush=3):
+                                _g[gy,gx] = strength
+                        grid = grid.at[:,:,5].set(jnp.array(_g))
+                        print(f"  [{_label}] pulse ({x0},{y0})→({x1},{y1}) str={strength:.2f}")
+
+                elif _brush == 'wipe':
+                    # wipe cx cy r — circular extinction zone (trail cells are protected)
+                    if len(_parts) >= 4:
+                        cx,cy,r = int(_parts[1]),int(_parts[2]),int(_parts[3])
+                        _g_np = np.array(grid)
+                        for mirror in ([False,True] if artist_mirror else [False]):
+                            mcx = GRID_W-1-cx if mirror else cx
+                            for (gy,gx) in _circle_cells(mcx,cy,r):
+                                if trail_mask[gy,gx]:
+                                    continue   # never kill trail cells
+                                _g_np[gy,gx,0] = 1.0
+                                _g_np[gy,gx,1] = 0.0
+                                _g_np[gy,gx,2:14] = 0.0
+                        grid = jnp.array(_g_np)
+                        print(f"  [{_label}] wipe circle ({cx},{cy}) r={r} (trails protected)")
+
+                elif _brush == 'wipe_rect':
+                    # wipe_rect x1 y1 x2 y2 — clear rectangle (trail cells are protected)
+                    if len(_parts) >= 5:
+                        rx0,rx1 = min(int(_parts[1]),int(_parts[3])), max(int(_parts[1]),int(_parts[3]))
+                        ry0,ry1 = min(int(_parts[2]),int(_parts[4])), max(int(_parts[2]),int(_parts[4]))
+                        rx0,rx1 = max(0,rx0), min(GRID_W,rx1)
+                        ry0,ry1 = max(0,ry0), min(GRID_H,ry1)
+                        _g_np = np.array(grid)
+                        # Build mask: cells to wipe = in rect AND not on trail
+                        _wipe_region = np.zeros((GRID_H, GRID_W), dtype=bool)
+                        _wipe_region[ry0:ry1, rx0:rx1] = True
+                        _wipe_region &= ~trail_mask   # protect trail cells
+                        _g_np[_wipe_region, 0] = 1.0
+                        _g_np[_wipe_region, 1] = 0.0
+                        _g_np[_wipe_region, 2:14] = 0.0
+                        grid = jnp.array(_g_np)
+                        print(f"  [{_label}] wipe_rect ({rx0},{ry0})→({rx1},{ry1}) (trails protected)")
+
+                elif _brush == 'blob':
+                    if len(_parts) >= 3:
+                        bx,by = int(_parts[1]),int(_parts[2])
+                        strength = float(_parts[3]) if len(_parts) > 3 else 0.25
+                        r = 12   # larger than interactive BLOB_RADIUS — needs mass to bootstrap GS
+                        _g_a = np.array(grid[:,:,0])
+                        _g_b = np.array(grid[:,:,1])
+                        for mirror in ([False,True] if artist_mirror else [False]):
+                            mbx = GRID_W-1-bx if mirror else bx
+                            for (gy,gx) in _circle_cells(mbx,by,r):
+                                _g_a[gy,gx] = 1.0 - strength
+                                _g_b[gy,gx] = strength
+                        grid = grid.at[:,:,0].set(jnp.array(_g_a))
+                        grid = grid.at[:,:,1].set(jnp.array(_g_b))
+                        print(f"  [{_label}] blob ({bx},{by}) str={strength:.2f} r={r}")
+
+                elif _brush == 'reset':
+                    regime_idx = np.random.randint(0, len(regime_names))
+                    _f, _k = GS_REGIMES[regime_names[regime_idx]]
+                    _sk = random.PRNGKey(int(step_count) % 10000)
+                    grid, _ = init_nca_grid(_sk, GRID_H, GRID_W, _f, _k)
+                    f_field, k_field = make_fk_field(GRID_H, GRID_W, _f, _k, phase_fx, phase_fy, phase_kx, phase_ky)
+                    jf_field = jnp.array(f_field)
+                    jk_field = jnp.array(k_field)
+                    step_count = 0
+                    auto_nudges = 0
+                    print(f"  [{_label}] reset → {regime_names[regime_idx]}  f={_f:.4f} k={_k:.4f}")
+
+                elif _brush == 'shape':
+                    # shape circle/ring/spiral cx cy r
+                    # Also paints ch5 on the outline so organisms lock onto the shape
+                    if len(_parts) >= 5:
+                        shape_type = _parts[1]
+                        cx,cy,r = int(_parts[2]),int(_parts[3]),int(_parts[4])
+                        _g_a  = np.array(grid[:,:,0])
+                        _g_b  = np.array(grid[:,:,1])
+                        _g_ch5 = np.array(grid[:,:,5])
+                        for mirror in ([False,True] if artist_mirror else [False]):
+                            mcx = GRID_W-1-cx if mirror else cx
+                            if shape_type == 'circle':
+                                for (gy,gx) in _circle_cells(mcx,cy,r):
+                                    _g_a[gy,gx] = 0.5; _g_b[gy,gx] = 0.5
+                                    _g_ch5[gy,gx] = 0.8; trail_mask[gy,gx] = True
+                            elif shape_type == 'ring':
+                                for (gy,gx) in _circle_cells(mcx,cy,r):
+                                    d = np.sqrt((gy-cy)**2+(gx-mcx)**2)
+                                    if d >= r-3:
+                                        _g_a[gy,gx] = 0.3; _g_b[gy,gx] = 0.6
+                                        _g_ch5[gy,gx] = 0.8; trail_mask[gy,gx] = True
+                            elif shape_type == 'spiral':
+                                for angle in np.linspace(0, 4*np.pi, 300):
+                                    rad = r * angle / (4*np.pi)
+                                    gx = int(mcx + rad*np.cos(angle))
+                                    gy = int(cy  + rad*np.sin(angle))
+                                    if 0<=gy<GRID_H and 0<=gx<GRID_W:
+                                        _g_a[gy,gx] = 0.3; _g_b[gy,gx] = 0.5
+                                        _g_ch5[gy,gx] = 0.8; trail_mask[gy,gx] = True
+                        grid = grid.at[:,:,0].set(jnp.array(_g_a))
+                        grid = grid.at[:,:,1].set(jnp.array(_g_b))
+                        grid = grid.at[:,:,5].set(jnp.array(_g_ch5))
+                        jtrail = jnp.array(trail_mask)
+                        print(f"  [{_label}] shape {shape_type} ({cx},{cy}) r={r} +ch5trail")
+
+                elif _brush == 'wait':
+                    pass   # no-op: Gemini uses this to skip turns and let organisms settle
+
+                elif _brush == 'drift':
+                    nonlocal trail_drift_x, trail_drift_y
+                    if len(_parts) >= 2 and _parts[1] == 'stop':
+                        trail_drift_x = trail_drift_y = 0
+                        print(f"  [{_label}] drift stopped")
+                    elif len(_parts) >= 3:
+                        trail_drift_x = int(_parts[1])
+                        trail_drift_y = int(_parts[2])
+                        print(f"  [{_label}] drift ({trail_drift_x},{trail_drift_y}) px per {DRIFT_INTERVAL} steps")
+
+                elif _brush == 'clear_trail':
+                    trail_mask[:] = False
+                    jtrail = jnp.zeros((GRID_H,GRID_W), dtype=bool)
+                    trail_drift_x = trail_drift_y = 0
+                    print(f"  [{_label}] clear_trail")
+
+                elif _brush == 'clear_walls':
+                    wall_mask[:] = False
+                    jwall = jnp.zeros((GRID_H,GRID_W), dtype=bool)
+                    print(f"  [{_label}] clear_walls")
+
+                elif _brush == 'palette':
+                    if len(_parts) >= 2:
+                        _pname = _parts[1]
+                        if _pname in PALETTES:
+                            palette_idx    = palette_names.index(_pname)
+                            palette_target = np.array(PALETTES[_pname], dtype=np.float32)
+                            print(f"  [{_label}] palette → {_pname}")
+                        else:
+                            print(f"  [{_label}] unknown palette: {_pname}. Options: {', '.join(palette_names)}")
+
+                elif _brush == 'mode':
+                    if len(_parts) >= 2 and _parts[1] in NCA_RENDER_MODES:
+                        render_mode     = _parts[1]
+                        render_mode_idx = NCA_RENDER_MODES.index(_parts[1])
+                        print(f"  [{_label}] mode → {render_mode}")
+
+                elif _brush == 'trailcolor':
+                    if len(_parts) >= 4:
+                        ch5_tint_color = (int(_parts[1]), int(_parts[2]), int(_parts[3]))
+                        show_ch5_overlay = True
+                        print(f"  [{_label}] trailcolor → {ch5_tint_color}")
+
+                elif _brush == 'mirror':
+                    if len(_parts) >= 2:
+                        artist_mirror = (_parts[1] == 'on')
+                        print(f"  [{_label}] mirror → {'ON' if artist_mirror else 'OFF'}")
 
         # ── LLM bridge command polling (single-agent) ─────────────────────
         if step_count % CMD_POLL_EVERY == 0 and os.path.exists(CMD_FILE):
@@ -1083,8 +1470,38 @@ def run():
             except Exception:
                 pass   # never crash the main loop on bridge errors
 
+        # ── Artist mode command polling ───────────────────────────────────
+        if ARTIST_MODE and step_count % CMD_POLL_EVERY == 0 and os.path.exists(CMD_FILE_ARTIST):
+            try:
+                with open(CMD_FILE_ARTIST, 'r') as _cf:
+                    _raw = _cf.read().strip()
+                if _raw and _raw.lower() != 'none':
+                    # Support multi-command COMMANDS: block or single line
+                    _lines = []
+                    _in_block = False
+                    for _line in _raw.splitlines():
+                        _line = _line.strip()
+                        if _line.lower().startswith('commands:'):
+                            _in_block = True
+                            continue
+                        if _line.lower().startswith('speech:') or _line.lower().startswith('reason:'):
+                            _speech = _line.split(':', 1)[1].strip()
+                            print(f"  [ARTIST] {_speech}")
+                            continue
+                        if _in_block and _line and not _line.startswith('#'):
+                            _lines.append(_line)
+                        elif not _in_block and _line and not _line.startswith('#'):
+                            _lines.append(_line)
+                    for _acmd in _lines:
+                        if _acmd.lower() != 'none':
+                            _execute_llm_command(_acmd.lower(), 'ARTIST')
+                    with open(CMD_FILE_ARTIST, 'w') as _cf:
+                        _cf.write('none')
+            except Exception as _e:
+                print(f"  [ARTIST] poll error: {_e}")
+
         # ── Battle mode command polling ───────────────────────────────────
-        if step_count % CMD_POLL_EVERY == 0:
+        if BATTLE_MODE and step_count % CMD_POLL_EVERY == 0:
             try:
                 # Read whose turn it is
                 _battle_turn = None
@@ -1121,7 +1538,7 @@ def run():
                 pass
 
         # Advance battle turn after N steps
-        if os.path.exists(TURN_FILE) and _battle_next_turn_step == 0:
+        if BATTLE_MODE and os.path.exists(TURN_FILE) and _battle_next_turn_step == 0:
             _battle_next_turn_step = step_count + BATTLE_TURN_STEPS
         if _battle_next_turn_step > 0 and step_count >= _battle_next_turn_step:
             try:
@@ -1189,11 +1606,35 @@ def run():
                 sy = gy * SCREEN_H // GRID_H
                 pygame.draw.rect(screen, wall_color, (sx, sy, cell_w, cell_h))
 
+        # ── ch5 overlay — cyan heatmap showing spatial trail signal ───────────
+        if show_ch5_overlay:
+            ch5_np = np.array(grid[:, :, 5])
+            ch5_min, ch5_max = ch5_np.min(), ch5_np.max()
+            if ch5_max > ch5_min + 1e-8:
+                ch5_norm = (ch5_np - ch5_min) / (ch5_max - ch5_min)
+            else:
+                ch5_norm = np.zeros_like(ch5_np)
+            # pygame surfarray is (W, H) so transpose (1, 0)
+            ch5_t = ch5_norm.T.astype(np.float32)
+            ch5_surf_a = pygame.Surface((GRID_W, GRID_H), pygame.SRCALPHA)
+            px = pygame.surfarray.pixels3d(ch5_surf_a)
+            px[:, :, 0] = (ch5_t * ch5_tint_color[0]).astype(np.uint8)
+            px[:, :, 1] = (ch5_t * ch5_tint_color[1]).astype(np.uint8)
+            px[:, :, 2] = (ch5_t * ch5_tint_color[2]).astype(np.uint8)
+            del px
+            pa = pygame.surfarray.pixels_alpha(ch5_surf_a)
+            pa[:, :] = (ch5_t * 180).astype(np.uint8)
+            del pa
+            ch5_scaled = pygame.transform.scale(ch5_surf_a, (DISPLAY_W, DISPLAY_H))
+            screen.blit(ch5_scaled, (0, 0))
+
         palette_str = palette_names[palette_idx]
         free_str  = "  |  FREE-CH" if (free_channels and step_count >= FREE_WARMUP) else ""
         wall_str  = "  |  WALL-DRAW (D=clear)" if wall_mode else ("  |  walls" if np.any(wall_mask) else "")
+        ch5_str   = "  |  CH5-OVERLAY" if show_ch5_overlay else ""
+        trail_str = f"  |  TRAIL-PAINT str={trail_strength:.3f} (N=clear)" if trail_mode else ("  |  trail" if np.any(trail_mask) else "")
         hud = font.render(
-            f"step {step_count}  |  bit={physics_bit:.0f}({'L' if physics_bit else 'G'}){free_str}{wall_str}  f={f:.4f}±{FK_SPATIAL_AMP_F} k={k:.4f}±{FK_SPATIAL_AMP_K}  |  {palette_str}  |  {render_mode}+{effect}  |  spd={steps_per_frame}  |  W=walls D=clear T=physics A=sound M=mode E=effect P=palette F=poke Z=chaos S=save",
+            f"step {step_count}  |  bit={physics_bit:.0f}({'L' if physics_bit else 'G'}){free_str}{wall_str}{trail_str}{ch5_str}  f={f:.4f}±{FK_SPATIAL_AMP_F} k={k:.4f}±{FK_SPATIAL_AMP_K}  |  {palette_str}  |  {render_mode}+{effect}  |  spd={steps_per_frame}  |  K=wipe Y=trail(L=draw R=blob) [/]=str N=clear W=walls D=clear X=ch5 T=physics A=sound M=mode E=effect P=palette F=poke Z=chaos S=save",
             True, (80, 80, 80)
         )
         screen.blit(hud, (10, 10))

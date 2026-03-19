@@ -300,7 +300,7 @@ def write_command(command, cmd_file):
 
 # ── Provider clients ──────────────────────────────────────────────────────────
 
-def make_anthropic_client(model, system_prompt):
+def make_anthropic_client(model, system_prompt, max_tokens=120):
     try:
         import anthropic
     except ImportError:
@@ -311,7 +311,7 @@ def make_anthropic_client(model, system_prompt):
     async def call(history):
         response = client.messages.create(
             model=model,
-            max_tokens=120,
+            max_tokens=max_tokens,
             system=system_prompt,
             messages=history,
         )
@@ -320,7 +320,7 @@ def make_anthropic_client(model, system_prompt):
     return call
 
 
-def make_gemini_client(model, system_prompt):
+def make_gemini_client(model, system_prompt, max_tokens=120):
     try:
         from google import genai
         from google.genai import types
@@ -343,12 +343,372 @@ def make_gemini_client(model, system_prompt):
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
-                max_output_tokens=120,
+                max_output_tokens=max_tokens,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
         return response.text
 
     return call
+
+
+# ── Artist system prompt ──────────────────────────────────────────────────────
+
+SYSTEM_PROMPT_ARTIST = """You are an artist painting with living organisms on a 256×256 grid.
+Grid: (0,0)=top-left, (255,255)=bottom-right. Center is (128,128).
+
+THE ONE RULE — understand this and everything else follows:
+Your TRAILS are your art. Organisms lock onto pheromone trails and hold them permanently.
+The trail re-injects itself every step — organisms are always being pulled back to it.
+Anything NOT on a trail is noise. Wipe it.
+
+TWO TOOLS, TWO JOBS — get this right and everything else works:
+  trail = YOUR PENCIL. Draws an invisible pheromone path. This IS your composition.
+          No organisms yet — just the attractor line baked into the grid.
+  blob  = YOUR INK. Drops living organisms that immediately go find the nearest trail.
+          Never use blob to "draw" — use it only to populate trails you already drew.
+
+THE WORKFLOW — always in this order:
+  Step 1 — Draw ALL your trails first (trail and/or shape commands). No blobs yet.
+  Step 2 — Drop ONE blob anywhere near your trails: blob 128 128 0.2
+            Organisms appear and migrate to the trails on their own.
+  Step 3 — Wipe outside your trails. Injection always creates chaos — expected and fine.
+  Step 4 — Wait. Do NOT add more blobs. The NCA does the work.
+  Step 5 — Maintain every turn: wipe ▓ zones that are NOT on your trails.
+  The trails re-inject ch5 every step — they are permanent attractors. You just keep outside clean.
+  WIPES ARE TRAIL-SAFE: wipe and wipe_rect never erase trail cells. Wipe freely — your lines survive.
+
+MOBILITY TELLS YOU WHEN TO ACT:
+  SETTLED (< 15)  = organisms locked on trails → safe to add next element
+  SETTLING (15-40) = still moving → wipe outer zones, do not add anything new
+  ACTIVE (> 40)   = chaos from recent injection → wipe, wipe, wipe, then wait
+
+ZONE MAP — read every turn:
+  ░ = clear   ▒ = some organisms   ▓ = dense
+  Each zone labeled with center coords (x,y). For every ▓ zone NOT on your trails: wipe it.
+
+BRUSHES:
+  trail x1 y1 x2 y2 [0.0-1.0]   — pheromone line, organisms follow and hold (default 0.5)
+  shape ring cx cy r             — ring trail + chemistry (organisms hold the ring)
+  shape circle cx cy r           — filled circle trail + chemistry
+  blob x y [0.2]                 — inject ONE organism seed (keep strength low: 0.15-0.25)
+  wipe cx cy r                   — circular kill zone — precision spot clean
+  wipe_rect x1 y1 x2 y2         — rectangle kill zone — sweep large areas
+  wait                           — do nothing this turn (still wipe outer zones)
+  reset                          — emergency restart if grid is completely dead
+  palette <name>                 — neon_city, aurora, cell_wall, northern_lights, radiation,
+                                   sakura, fungal_glow, pollen_burst, terminal_amber, candy_chrome
+  pulse x1 y1 x2 y2 [0.5]       — reinforce existing trail without redrawing
+  mirror on/off                  — bilateral symmetry
+
+SYNTAX RULES — these are hard failures if wrong:
+  trail needs EXACTLY 4 numbers: trail x1 y1 x2 y2     (strength is optional 5th)
+  shape needs EXACTLY 4 args:   shape ring cx cy r
+  wipe needs EXACTLY 3 numbers: wipe cx cy r
+  NEVER write the word "strength" — just the number: trail 50 80 200 80 0.8
+
+RESPOND EXACTLY in this format, nothing else:
+COMMANDS:
+<wipe every ▓ zone that is NOT on your trails>
+<one action: trail/shape/blob/wait — or nothing if only cleaning this turn>
+SPEECH: <one sentence, present tense, what you are doing or seeing>"""
+
+
+CMD_FILE_ARTIST = os.path.join(os.path.dirname(__file__), 'llm_commands_artist.txt')
+ARTIST_STEPS    = 400   # NCA steps between artist turns
+ARTIST_TRAIL_DEFAULT = 0.5  # default trail strength when not specified by LLM
+
+
+# ── Artist ch5 spatial summary ────────────────────────────────────────────────
+
+PALETTE_DESCRIPTIONS = {
+    'neon_city':      'electric blue/cyan/pink — futuristic, high contrast',
+    'aurora':         'deep blue/green/purple — ethereal, dark background',
+    'cell_wall':      'green on black — biological, microscope look',
+    'northern_lights':'teal/violet/white — flowing, cold light',
+    'radiation':      'yellow/green on black — toxic, glowing',
+    'sakura':         'pink/white/soft — delicate, floral',
+    'fungal_glow':    'orange/brown/dark — organic, earthy',
+    'pollen_burst':   'gold/orange/bright — warm explosion',
+    'terminal_amber': 'amber/gold on dark — warm, retro terminal',
+    'candy_chrome':   'bright multicolor — playful, saturated',
+}
+
+def _spatial_map(rows):
+    """Build a 4×4 zone ASCII map from artist_state.json (written by run_free.py).
+    Each zone is 64×64 grid pixels. Center coords are labeled so Gemini knows where to aim wipes."""
+    import json as _json
+
+    _state_path = os.path.join(os.path.dirname(__file__), 'artist_state.json')
+    zones = None
+    try:
+        with open(_state_path) as _f:
+            zones = _json.load(_f)['zones']
+    except Exception:
+        pass
+
+    def _density(d):
+        # d = fraction of pixels that are dark (organism present)
+        if d < 0.05: return '░'   # nearly empty
+        if d < 0.20: return '▒'   # some organisms
+        return '▓'                # dense organisms
+
+    if zones:
+        # Zone centers: x = 32, 96, 160, 224  |  y = 32, 96, 160, 224
+        # Map symbol: rows = y (top→bottom), cols = x (left→right)
+        grid_rows = []
+        for r in range(4):
+            cy = 32 + r * 64
+            cells = []
+            for c in range(4):
+                cx = 32 + c * 64
+                d = zones.get(f'{r}{c}', 0.0)
+                cells.append(f"{_density(d)}({cx:3d},{cy:3d})")
+            grid_rows.append('  │ ' + '  '.join(cells) + ' │')
+
+        lines = ["  Zone map (░=clear ▒=some ▓=dense) — numbers are grid coords for wipe x y r:"]
+        lines.append("  ┌" + "─" * 54 + "┐")
+        for row_line in grid_rows:
+            lines.append(row_line)
+        lines.append("  └" + "─" * 54 + "┘")
+        lines.append("  Spot-wipe a dense zone: wipe <x> <y> 40   Example: wipe 32 32 40")
+        return '\n'.join(lines)
+
+    # Fallback: estimate from CSV rows if zone file not available yet
+    if not rows:
+        return None
+    latest = rows[-1]
+    dark  = float(latest.get('dark', 0.5))
+    asym  = float(latest.get('asym', 0))
+    left  = float(latest.get('left_dark', dark))
+    right = float(latest.get('right_dark', dark))
+    top   = dark + asym * 0.3
+    bot   = dark - asym * 0.3
+
+    def _d2(d):
+        if d > 0.8: return '░'
+        if d > 0.5: return '▒'
+        return '▓'
+
+    tl, tr = _d2((left+top)/2), _d2((right+top)/2)
+    bl, br = _d2((left+bot)/2), _d2((right+bot)/2)
+    return (f"  Grid (estimated — zone file not yet written):\n"
+            f"  ┌──────┬──────┐\n"
+            f"  │  {tl}   │  {tr}   │  y=0-127\n"
+            f"  ├──────┼──────┤\n"
+            f"  │  {bl}   │  {br}   │  y=128-255\n"
+            f"  └──────┴──────┘\n"
+            f"  x=0-127  x=128-255")
+
+
+def format_artist_summary(rows, current_palette='unknown'):
+    """Extended summary for artist including ch5 activity and palette info."""
+    base = format_summary(rows)
+    if not rows:
+        return base
+    latest  = rows[-1]
+    ch5     = float(latest.get('ch5', 0))
+    mob     = float(latest.get('blob_mobility', 0))
+    n_blobs = float(latest.get('n_blobs', 0))
+    dark    = float(latest.get('dark', 0))
+
+    lines = [base, ""]
+
+    # Settling status — the key signal Gemini needs to decide wait vs act
+    trail_active = ch5 > 0.008
+    if mob < 15 and trail_active:
+        settling = "SETTLED — organisms locked onto trails. Safe to add next element."
+    elif mob < 40:
+        settling = "SETTLING — organisms slowing down, still finding trails. Consider wait."
+    else:
+        settling = "ACTIVE — organisms moving fast, not yet settled. Issue wait before next element."
+    lines.append(f"Mobility: {mob:.1f}  → {settling}")
+    lines.append(f"Trail signal (ch5): {ch5:.5f}  {'trails holding' if trail_active else 'no trails — organisms have nowhere to go'}")
+
+    # Spatial map
+    smap = _spatial_map(rows)
+    if smap:
+        lines.append(smap)
+
+    b_active = float(latest.get('b_active', 0))
+    is_extinct = b_active < 0.005 and n_blobs == 0
+    if is_extinct:
+        lines.append("⚠ GRID IS DEAD — issue reset immediately. blob commands cannot revive extinction.")
+    elif dark > 0.85:
+        lines.append("⚠ GLOBAL BLOB — chemistry flooded, art features invisible. Wipe interior dark before drawing detail.")
+    elif dark > 0.6:
+        lines.append("Canvas: mostly dark — ideal for art. Features will show clearly against the background.")
+    elif dark < 0.3:
+        lines.append("Canvas: bright/crowded — wipe interior regions before adding detail or it will be invisible")
+    if n_blobs > 30:
+        lines.append(f"Population: {int(n_blobs)} organisms — swarm mode, will follow trails quickly")
+    elif n_blobs < 3 and not is_extinct:
+        lines.append(f"Population: {int(n_blobs)} organisms — very sparse, drop more blobs first")
+
+    pal_desc = PALETTE_DESCRIPTIONS.get(current_palette, 'unknown palette')
+    lines.append(f"\nCurrent palette: {current_palette} ({pal_desc})")
+    lines.append("Other palettes: " + ', '.join(f"{k}({v.split('—')[0].strip()})" for k,v in PALETTE_DESCRIPTIONS.items() if k != current_palette))
+
+    return '\n'.join(lines)
+
+
+# ── Artist mode loop ──────────────────────────────────────────────────────────
+
+async def run_artist(verbose=False, dry_run=False, provider='gemini', model=None):
+    """Human-in-the-loop Gemini artist. You type prompts, it paints."""
+    import threading, queue as _queue
+
+    if model is None:
+        model = DEFAULT_MODELS[provider]
+
+    if provider == 'gemini':
+        call_llm = make_gemini_client(model, SYSTEM_PROMPT_ARTIST, max_tokens=1200)
+    else:
+        call_llm = make_anthropic_client(model, SYSTEM_PROMPT_ARTIST, max_tokens=1200)
+
+    cmd_file = CMD_FILE_ARTIST
+    with open(cmd_file, 'w') as f:
+        f.write('none')
+
+    history         = []
+    human_queue     = _queue.Queue()
+    current_palette = 'terminal_amber'
+    hold_mode       = False   # True when Gemini declares DONE
+    hold_trails     = []      # trail coord strings to pulse during hold
+    hold_ticks      = 0       # how many hold-mode loops have passed
+
+    def _input_thread():
+        while True:
+            try:
+                msg = input()
+                if msg.strip():
+                    human_queue.put(msg.strip())
+            except (EOFError, KeyboardInterrupt):
+                break
+
+    threading.Thread(target=_input_thread, daemon=True).start()
+
+    print(f"ARTIST MODE — provider={provider}  model={model}")
+    print(f"Commands → {cmd_file}")
+    print(f"Type to give direction at any time. Gemini runs autonomously between turns.")
+    print()
+
+    while True:
+        await asyncio.sleep(ARTIST_STEPS / 60)
+
+        # Check for human input
+        human_msg = None
+        while not human_queue.empty():
+            human_msg = human_queue.get()
+
+        if human_msg:
+            print(f"\n  [YOU] {human_msg}")
+            if hold_mode:
+                hold_mode = False
+                print(f"  ── RESUMING ─────────────────────────────────")
+
+        # ── HOLD MODE — pulse trails locally, no API call ─────────────────
+        if hold_mode and not human_msg:
+            hold_ticks += 1
+            # Only print a reminder every ~60 seconds (10 ticks × 6.5s) so typing isn't broken up
+            if hold_ticks == 1:
+                print(f"  Type your next direction and press Enter.")
+            elif hold_ticks % 10 == 0:
+                ts = datetime.now().strftime('%H:%M:%S')
+                print(f"  still holding [{ts}] — type to continue")
+            if hold_trails:
+                pulse_cmds = '\n'.join(f"pulse {t}" for t in hold_trails)
+                with open(cmd_file, 'w') as f:
+                    f.write(f"COMMANDS:\n{pulse_cmds}\n")
+            continue
+
+        csv_path = find_latest_csv()
+        if csv_path is None:
+            print("  [ARTIST] Waiting for run_free.py --artist --research to start...")
+            await asyncio.sleep(5)
+            continue
+
+        rows = read_recent_rows(csv_path)
+        if not rows:
+            await asyncio.sleep(3)
+            continue
+
+        summary = format_artist_summary(rows, current_palette=current_palette)
+        user_content = f"Current grid state:\n{summary}"
+        if human_msg:
+            user_content += f"\n\nHuman director says: \"{human_msg}\"\nRespond to this direction over multiple turns if needed — do NOT put DONE until the full request is visually complete."
+        else:
+            user_content += f"\n\nContinue working. Put DONE only when the entire composition is visually complete and holding well."
+
+        history.append({"role": "user", "content": user_content})
+        if len(history) > MAX_HISTORY * 2:
+            history = history[-(MAX_HISTORY * 2):]
+
+        if verbose:
+            print(f"\n{'─'*60}\n{summary}")
+
+        if dry_run:
+            print(f"  [ARTIST] [dry-run] Would call API")
+            continue
+
+        try:
+            reply = await call_llm(history)
+            history.append({"role": "assistant", "content": reply})
+
+            commands = []
+            speech   = ''
+            in_block = False
+            for line in reply.strip().splitlines():
+                line = line.strip()
+                if line.lower().startswith('commands:'):
+                    in_block = True
+                    continue
+                if line.lower().startswith('speech:'):
+                    speech = line.split(':', 1)[1].strip()
+                    in_block = False
+                    continue
+                if in_block and line and not line.startswith('#'):
+                    commands.append(line)
+
+            is_done          = any(c.strip().upper() == 'DONE' for c in commands)
+            active_commands  = [c for c in commands if c.strip().upper() != 'DONE']
+
+            # Track trails for hold mode pulsing
+            for c in active_commands:
+                if c.startswith('trail '):
+                    coords = c.replace('trail ', '').strip()
+                    if coords not in hold_trails:
+                        hold_trails.append(coords)
+                if c.startswith('palette '):
+                    current_palette = c.split()[1]
+
+            if active_commands:
+                block = 'COMMANDS:\n' + '\n'.join(active_commands)
+                if speech:
+                    block += f"\nSPEECH: {speech}"
+                with open(cmd_file, 'w') as f:
+                    f.write(block + '\n')
+
+            ts = datetime.now().strftime('%H:%M:%S')
+            if is_done:
+                hold_mode = True
+                hold_ticks = 0
+                print(f"\n  {'─'*50}")
+                print(f"  HOLDING THE COMPOSITION. AWAITING YOUR COMMAND.")
+                if speech:
+                    print(f"  \"{speech}\"")
+                print(f"  {'─'*50}")
+            else:
+                print(f"\n  ── [{ts}] ARTIST ──────────────────────")
+                if speech:
+                    print(f"  \"{speech}\"")
+                for c in active_commands:
+                    print(f"  → {c}")
+                if not active_commands:
+                    print(f"  (no commands this turn)")
+
+        except Exception as e:
+            print(f"  [ARTIST] API error: {e}")
 
 
 # ── Main async loop ───────────────────────────────────────────────────────────
@@ -489,13 +849,23 @@ if __name__ == '__main__':
     parser.add_argument('--model',    default=None, help='Model override')
     parser.add_argument('--agent',    default=None, choices=['keeper', 'destroyer'],
                         help='Battle mode: keeper or destroyer')
+    parser.add_argument('--artist',   action='store_true',
+                        help='Artist mode: human-in-the-loop Gemini painter')
     args = parser.parse_args()
 
-    asyncio.run(run(
-        verbose=args.log,
-        dry_run=args.dry_run,
-        interval=args.interval,
-        provider=args.provider,
-        model=args.model,
-        agent=args.agent,
-    ))
+    if args.artist:
+        asyncio.run(run_artist(
+            verbose=args.log,
+            dry_run=args.dry_run,
+            provider=args.provider,
+            model=args.model,
+        ))
+    else:
+        asyncio.run(run(
+            verbose=args.log,
+            dry_run=args.dry_run,
+            interval=args.interval,
+            provider=args.provider,
+            model=args.model,
+            agent=args.agent,
+        ))

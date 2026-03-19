@@ -9,6 +9,111 @@ A compact NCA (17,000 parameters) trained simultaneously on three incompatible L
 
 ---
 
+## LLM-NCA Hybrid: Persistent Programs in a Living Substrate (2026-03-19)
+
+**The short version:** An LLM painted "KK ✕" in living organisms on a neural cellular automaton. When the LLM was disconnected, the composition kept running on its own.
+
+**The mechanism:** The LLM (Gemini 2.5 Flash) issues spatial commands that write pheromone values (ch5=0.8) into specific grid cells. The NCA re-injects that value every step — permanently. Organisms follow ch5 gradients and lock onto those cells. The LLM isn't puppeting the organisms in real time. It's writing standing instructions into the physics of the substrate. The NCA then executes those instructions indefinitely, whether the LLM is watching or not.
+
+**What happened in the first clean session:**
+1. Asked Gemini to draw an X across the grid
+2. Gemini drew two diagonal trails corner-to-corner, dropped one blob to seed organisms, then wiped all external chaos
+3. Organisms locked onto both diagonals
+4. Unprompted, Gemini added a protective ring around the center junction — the point where both trails cross and organisms accumulate most densely. No instruction existed to do this. It reasoned that the junction was the structural heart of the composition and defended it.
+5. Then asked Gemini to add "KK" — its own initials were already on the grid, so it placed two K letterforms in the remaining canvas space, correctly sizing and positioning them relative to the existing composition
+6. LLM terminal was closed. The composition — X, ring, KK — continued running unchanged
+
+| | |
+|---|---|
+| ![](screenshots/llm_artist_kk_gold.png) | ![](screenshots/llm_artist_kk_neon.png) |
+
+*Left: composition in terminal_amber palette. Right: same composition in neon_city. The KK letterforms and central X are visible as living organism formations held by pheromone infrastructure.*
+
+**Why this is different from generative art:** A generative system renders an output. This system encodes intent into a substrate that continues executing it. The LLM wrote a program. The NCA is running it. The composition is not an image — it's a standing instruction that living matter is following.
+
+**The junction ring:** Gemini added this without being asked. It understood from the physics description that where trails cross, organisms accumulate and the structure is most vulnerable to chaos. It made a structural decision — protect the most important point — and executed it with a `shape ring` command. This is the first observed case of an LLM making an unsolicited architectural decision about a living system based on understanding of its physics.
+
+Bridge code: [`nca/llm_bridge.py`](nca/llm_bridge.py) (`--artist --provider gemini`)
+Run: `python nca/run_free.py --physarum --artist --research` + `python nca/llm_bridge.py --artist --provider gemini`
+
+---
+
+## LLM Artist — Painting With Living Organisms (2026-03-19)
+
+The most recent development: an LLM issuing spatial commands onto a live NCA grid, directing organisms the way a choreographer directs dancers — not drawing pixels, but placing attractors that living matter fills in, holds, and evolves around.
+
+**The setup:** Gemini 2.5 Flash runs in a second terminal, reading the NCA's feature state every ~6 seconds and writing brush commands to a shared file. `run_free.py` polls the file and executes them against the live grid. The human types direction in the terminal ("build a mandala", "tiger stripes in amber") and Gemini responds with commands and narration.
+
+**The brushes:**
+- `trail x1 y1 x2 y2` — draw a pheromone (ch5) line; organisms follow and hold it
+- `drift dx dy` — move the trail by (dx,dy) pixels every 30 steps; organisms chase it like a magnet. Shepherd, not sign.
+- `blob x y` — inject a single organism
+- `wipe cx cy r` — circular extinction zone
+- `shape ring/circle/spiral cx cy r` — geometric chemistry stamps
+- `pulse x1 y1 x2 y2` — spike ch5 to snap drifting organisms back to a line
+- `palette <name>` / `trailcolor r g b` — change the visual mood
+- `mirror on/off` — bilateral symmetry; every brush command applied to both sides
+- `DONE` — declare the composition complete; bridge enters hold mode, pulsing trails to maintain structure indefinitely without further API calls
+
+**What actually happened:** In the first working session, Gemini drew an X pattern to concentrate organisms at the center, then built outward with ring shapes. When asked for "tiger stripes," it issued 7 evenly-spaced vertical trails with amber palette and dark trail glow — organisms locked onto each stripe and held formation. When asked to hold, it issued `DONE` and the terminal printed:
+
+```
+  ── HOLDING THE COMPOSITION. AWAITING YOUR COMMAND.
+  "The stripes hold. I am watching the borders."
+  ──────────────────────────────────────────────────
+  AWAITING DIRECTION  [10:14:33]
+```
+
+**The drift tool addresses a fundamental problem** with static trail placement: organisms collect on the line and then just sit there. `drift` turns the trail into a moving attractor — a broom. Draw a short trail near existing population, issue `drift 2 0`, and the trail slides rightward every 30 steps. The organisms chase it across the canvas.
+
+**This is not generative art.** The LLM isn't rendering pixels. It's issuing spatial commands that create physical gradients in a living system. The composition responds, self-organizes, and evolves. The line Gemini drew has agency — it becomes a population that breathes.
+
+Bridge code: [`nca/llm_bridge.py`](nca/llm_bridge.py) (`--artist --provider gemini`)
+
+---
+
+## GS+Physarum: The Hidden Channel Grammar Is Teacher-Specific (2026-03-19)
+
+We trained a third model — GS + Physarum polycephalum (slime mold) as simultaneous physics teachers, using ch13=0.5 as the Physarum bit.
+
+The result confirmed and complicated the Universal Grammar Hypothesis:
+
+| Model | Teachers | ch2 active | ch4 active | ch5 active |
+|-------|----------|-----------|-----------|-----------|
+| GS-only | GS | 0.6% | 0.1% | 0.1% |
+| Fused v2 | GS + Lenia | 94% | 98% | 28% |
+| Physarum | GS + Physarum | 0.5% | 9% | **100%** |
+
+**Grammar requires multi-physics tension** — confirmed. GS alone: flat hidden channels, no grammar. Add a second physics teacher: hidden channels self-activate and specialize.
+
+**But the grammar is not universal.** GS+Lenia activates ch2 (chaos signal) and ch4 (boundary tracker). GS+Physarum activates ch5, always positive, always on. Different teachers produce different internal vocabularies. The hidden channel dictionary is a function of the specific tension, not just the presence of tension.
+
+**ch5 is a pheromone trail channel.** Spatially, it:
+- Concentrates at blob boundaries (edge signal)
+- **Persists behind moving blobs** — the model secretes ch5 into the space it just left, creating visible trail persistence across hundreds of steps
+- Correlates with dark material density and mobility
+
+The physarum model is behaviorally distinct from the fused model: 3x more blobs (28 vs 10), all smaller; 2x faster movement (mobility 71 vs 31); almost no suppression zones — pure swarming, no territory. The NCA internalized the difference between Lenia's structured creature dynamics and Physarum's trail-following network formation.
+
+---
+
+## Stigmergic Construction (2026-03-19)
+
+The ch5 trail channel can be painted directly onto the live grid. The physarum NCA treats injected ch5 as a pre-existing pheromone trail and moves toward it.
+
+**What organisms do with trails:**
+- **Lock onto lines** — a glider found a drawn line and stayed for thousands of steps while the grid evolved around it
+- **Form living walls** — organisms line up along trails and hold formation; the trail becomes the organism
+- **Build junctions** — where two trails cross, organisms accumulate at the intersection and anchor there
+- **Create stable interiors** — a closed loop trail causes organisms to hold the boundary; the enclosed region self-organizes into a calm interior
+- **Reconstruct after erasure** — erase ch5 and the structure slowly dissolves; redraw it and they rebuild
+
+This is stigmergic construction. The same mechanism Physarum uses to solve mazes and reconstruct the Tokyo rail network — but in a trained NCA, with human-drawn scaffolding.
+
+The anti-line constraint: on a fully dead grid (A=1, B=0), ch5 injection creates void boundaries rather than attractors. No living chemistry = no gradient to follow. Trail injection is **parasitic on existing activity** — it needs live organisms to work. This is not a limitation; it defines what trails mean: they are signals in a living system, not marks on a canvas.
+
+---
+
 ## Blind Stigmergy Battle (2026-03-18)
 
 **[▶ Watch on YouTube](https://youtu.be/9yP2SXGnSkA)**
@@ -398,13 +503,18 @@ These jump to specific f/k parameter sets. Their effect in this fused model diff
 - `[x]` **Hidden channel analysis** — ch2 and ch4 confirmed active and independent; ch4 concentrates at blob boundaries (edge detection)
 - `[x]` **Free channel experiment** — ch13 released at step 2000; model writes its own physics bit; produced binary orbit, comet fission, anti-creature orbital systems
 - `[x]` **Behavioral grammar** — 8 macro-states identified via k-means; transition matrix measured; system is not random
+- `[x]` **Physarum third teacher** — GS+Physarum trained; ch5 confirmed as pheromone trail channel (100% active); grammar is teacher-specific, not universal
+- `[x]` **GS-only grammar experiment** — flat hidden channels confirmed; multi-physics tension required for grammar to emerge
+- `[x]` **Stigmergic construction** — ch5 trail injection; organisms form living walls, junctions, stable corrals; structure rebuilds after erasure
+- `[x]` **Chemical walls and doors** — W key draws walls; organisms cannot cross; D clears; click-to-stamp respects walls
+- `[x]` **Blind Stigmergy Battle** — two LLMs fighting over one NCA grid through stigmergy alone; neither knows the other exists
+- `[x]` **LLM artist** — Gemini paints with living organisms via spatial brush commands; human-in-the-loop direction; hold mode; drift shepherd tool
+- `[ ]` **Artist video** — record a full session: Gemini builds a composition start to finish with narration
 - `[ ]` **Transition predictor** — given current state features, predict next state transition before it happens
-- `[ ]` **Decoder / control layer** — inject chemical pattern that steers feature vector toward target cluster centroid; "push toward Rich Ecosystem" as a command
 - `[ ]` **Gradual physics bit fade** — ramp ch13 over ~1000 steps instead of instant flip
 - `[ ]` **Comparison video** — GS-only vs fused, same seed, same duration, side by side
 - `[ ]` **Retrain classifier** — add new states from v2 runs (Lenia Chaos / Extreme Regime); fix Stable ↔ Near Extinction misclassification
-- `[ ]` **Physarum third teacher** — add slime mold trail dynamics (ch13=0.5) as third physics; watch whether ch5 activates for directed persistence
-- `[ ]` **GS-only grammar alignment** — run GS-only model with proper hidden channel training; Hungarian-match cluster centroids against fused model to test universal grammar hypothesis
+- `[ ]` **GS+Physarum grammar alignment** — Hungarian-match Physarum cluster centroids against fused model; test whether ch5 role is conserved across teachers
 
 ---
 

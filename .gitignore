@@ -9,6 +9,7 @@ build/
 
 # Private notes and dev todos
 notes/
+kktodo/
 kktodo*.md
 mycelium/
 

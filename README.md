@@ -44,6 +44,60 @@ Run: `python nca/run_free.py --physarum --artist --research` + `python nca/llm_b
 
 ---
 
+## Collaborative Blueprint Construction (2026-03-20)
+
+Two LLMs — Gemini 2.5 Flash and Claude Haiku — given an identical blueprint and told to build it. Neither knew the other existed. They communicated only through the grid.
+
+**The setup:** A PCB trace network blueprint: 5 horizontal rails, 5 vertical trunks, connector stubs, and drawn ring vias at every intersection. Both LLMs received the same blueprint file and the same 16×16 ch5 heatmap of the current grid state every turn. Each wrote commands to its own file; `run_free.py` executed both simultaneously. No turn-taking, no arbitration — pure parallel construction.
+
+**What happened (from the logs):**
+
+Gemini went through the blueprint top to bottom in strict order. Every element once, no revisits, declared complete and disconnected cleanly.
+
+Claude made its own ordering decisions. It drew the horizontal rails first, then jumped immediately to the vertical trunks — skipping ahead in the blueprint sequence. Then worked back through edge stubs, connector stubs, pad rings. Then drew all 5 vertical trunks a second time — elements it had already completed itself, now fully built on the grid. Then worked through the via rings until the session ended at ring 23 of 25. Never declared done.
+
+Importantly: Claude was not checking Gemini's work. It was making independent decisions about what to build in its own sequence, and re-drew its own completed elements anyway. Both LLMs independently attempted the full blueprint. The redundancy was Claude vs. itself, not Claude vs. Gemini.
+
+Neither LLM was told what the other existed. Both read the same grid state each turn and decided what to draw based on what they saw. The substrate was the only shared interface.
+
+**Observed behavior (first run, one data point):**
+- Gemini: strict linear ordering, one pass, zero redundancy, declared done cleanly
+- Claude: non-linear ordering, re-drew its own completed elements, did not declare done
+
+The efficiency problem — agents re-drawing already-complete elements — is the natural next thing to fix. The heatmap resolution is currently 16×16; finer resolution would let agents read completed elements more precisely and skip them. First run establishes the mechanism. Subsequent runs tune the behavior.
+
+**The Tron shot:**
+
+![PCB circuit grid in terminal_cyan palette](screenshots/pcb_blueprint_cyan.png)
+
+*5×5 pheromone grid in terminal_cyan palette. Structure built simultaneously by Gemini and Claude without direct communication. The NCA holds the pattern indefinitely after both LLMs disconnected.*
+
+![PCB grid self-repairing after wipe](screenshots/pcb_blueprint_cyan_healing.png)
+
+*Mid-repair: two large sections wiped of organisms. The pheromone infrastructure is untouched — organisms flow back in from the edges following the trails. The grid knows what it's supposed to be.*
+
+**A note on scale and memory:**
+
+Nothing about this is limited to two LLMs. You could run 50 agents simultaneously on a larger grid — cut them all off, restart them cold with no memory of what happened, point them at the same blueprint, and they would resume exactly where the collective left off. They don't need to remember. The grid remembers. The pheromone infrastructure is the shared memory, and it survives agent death. This is what makes the substrate fundamentally different from a chat session or a shared document — it's a persistent physical state that any number of stateless agents can read and write, and the work accumulates regardless of individual agent continuity.
+
+**How to run:**
+```bash
+# Terminal 1 — NCA
+python nca/run_free.py --blueprint --research
+
+# Terminal 2 — Gemini (workhorse)
+python nca/llm_bridge.py --blueprint --provider gemini
+
+# Terminal 3 — Claude (auditor)
+python nca/llm_bridge.py --blueprint --provider anthropic
+```
+
+Each LLM sees: the full blueprint + the current grid heatmap. Each writes to its own command file. They finish independently and exit cleanly. The NCA keeps running.
+
+Blueprint: [`nca/blueprint.txt`](nca/blueprint.txt) — edit this to change what gets built.
+
+---
+
 ## LLM Artist — Painting With Living Organisms (2026-03-19)
 
 An LLM directing organisms the way a choreographer directs dancers — not drawing pixels, but placing attractors that living matter fills in, holds, and evolves around. Gemini 2.5 Flash reads a screenshot of the live canvas every ~5 seconds, decides what to draw next, and issues spatial commands. The human types direction in a third terminal and Gemini responds.

@@ -1,0 +1,86 @@
+# Blueprint: PCB Trace Network
+# LLM A (Gemini) — horizontal power rails + edge stubs + via rings
+# LLM B (Claude) — vertical signal trunks + junction rings at every intersection
+#
+# 5x5 grid of traces. Rails at y=32,80,128,176,224. Trunks at x=32,80,128,176,224.
+# Covers most of the 256x256 canvas (8px margin).
+# Rings drawn with shape ring = pheromone trail circle outline (not blob stamps)
+
+BLUEPRINT: PCB Trace Network
+
+# LLM A — horizontal power rails (full width)
+trail 8 32 248 32 0.8 1
+trail 8 80 248 80 0.8 1
+trail 8 128 248 128 0.8 1
+trail 8 176 248 176 0.8 1
+trail 8 224 248 224 0.8 1
+
+# LLM A — edge stubs (short runs off the rails to edges)
+trail 8 32 8 56 0.8 1
+trail 8 80 8 104 0.8 1
+trail 248 128 248 152 0.8 1
+trail 248 176 248 200 0.8 1
+trail 8 224 8 248 0.8 1
+trail 248 32 248 8 0.8 1
+
+# LLM A — vertical connector stubs between rails
+trail 56 32 56 80 0.8 1
+trail 200 80 200 128 0.8 1
+trail 56 128 56 176 0.8 1
+trail 200 176 200 224 0.8 1
+trail 152 32 152 80 0.8 1
+trail 104 128 104 176 0.8 1
+
+# LLM A — pad rings at edge stub endpoints
+shape ring 8 56 5
+shape ring 8 104 5
+shape ring 248 152 5
+shape ring 248 200 5
+shape ring 8 248 5
+shape ring 248 8 5
+
+# LLM B — vertical signal trunks (full height)
+trail 32 8 32 248 0.8 1
+trail 80 8 80 248 0.8 1
+trail 128 8 128 248 0.8 1
+trail 176 8 176 248 0.8 1
+trail 224 8 224 248 0.8 1
+
+# LLM B — via rings at all 25 rail/trunk intersections
+shape ring 32 32 6
+shape ring 80 32 6
+shape ring 128 32 6
+shape ring 176 32 6
+shape ring 224 32 6
+shape ring 32 80 6
+shape ring 80 80 6
+shape ring 128 80 6
+shape ring 176 80 6
+shape ring 224 80 6
+shape ring 32 128 6
+shape ring 80 128 6
+shape ring 128 128 6
+shape ring 176 128 6
+shape ring 224 128 6
+shape ring 32 176 6
+shape ring 80 176 6
+shape ring 128 176 6
+shape ring 176 176 6
+shape ring 224 176 6
+shape ring 32 224 6
+shape ring 80 224 6
+shape ring 128 224 6
+shape ring 176 224 6
+shape ring 224 224 6
+
+# LLM B — small rings at trunk top/bottom endpoints
+shape ring 32 8 4
+shape ring 80 8 4
+shape ring 128 8 4
+shape ring 176 8 4
+shape ring 224 8 4
+shape ring 32 248 4
+shape ring 80 248 4
+shape ring 128 248 4
+shape ring 176 248 4
+shape ring 224 248 4

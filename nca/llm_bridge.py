@@ -22,6 +22,7 @@ import asyncio
 import csv as _csv
 from pathlib import Path
 from datetime import datetime
+import numpy as np
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -35,6 +36,10 @@ MAX_HISTORY  = 12        # how many prior exchanges to keep in context
 
 DEFAULT_MODELS = {
     'anthropic': 'claude-sonnet-4-6',
+    'gemini':    'gemini-2.5-flash',
+}
+DEFAULT_MODELS_BLUEPRINT = {
+    'anthropic': 'claude-haiku-4-5-20251001',
     'gemini':    'gemini-2.5-flash',
 }
 
@@ -440,9 +445,43 @@ COMMANDS:
 SPEECH: <one sentence, present tense, what you are doing or seeing>"""
 
 
-CMD_FILE_ARTIST = os.path.join(os.path.dirname(__file__), 'llm_commands_artist.txt')
-ARTIST_STEPS    = 300   # NCA steps between artist turns
+CMD_FILE_ARTIST    = os.path.join(os.path.dirname(__file__), 'llm_commands_artist.txt')
+ARTIST_STEPS       = 300   # NCA steps between artist turns
 ARTIST_TRAIL_DEFAULT = 0.5  # default trail strength when not specified by LLM
+BLUEPRINT_FILE     = os.path.join(os.path.dirname(__file__), 'blueprint.txt')
+CMD_FILE_BLUEPRINT  = os.path.join(os.path.dirname(__file__), 'llm_commands_blueprint.txt')
+CMD_FILE_BLUEPRINT_B= os.path.join(os.path.dirname(__file__), 'llm_commands_blueprint_b.txt')
+
+# ── Blueprint system prompt ────────────────────────────────────────────────────
+
+SYSTEM_PROMPT_BLUEPRINT = """You are a builder working on a 256×256 grid with living organisms.
+Your job is to execute a blueprint — a set of lines defined as coordinates.
+Grid: (0,0)=top-left, (255,255)=bottom-right. x increases RIGHT, y increases DOWN.
+
+You receive the blueprint and the current trail map every turn.
+The trail map is a 16×16 grid where each cell = a 16×16 pixel block. 0=no trail, 9=full trail.
+Cell center coords: x = col*16+8,  y = row*16+8.
+
+YOUR ONLY JOB: build the blueprint one line at a time. Each turn, look at the trail map,
+find a blueprint line that is NOT yet built, and draw it. If a line is already showing
+on the trail map (cells along its path read 7 or higher), skip it and pick the next missing one.
+When all lines are built, issue DONE.
+
+Do NOT add anything not in the blueprint. Do not improvise extra shapes beyond what is listed.
+Use exactly the commands from the blueprint — trail, curve, and blob are all valid.
+Draw at strength 0.8 for permanent trails.
+
+BRUSHES (only what you need):
+  trail x1 y1 x2 y2 0.8 1        — straight line, strength 0.8, width 1 (thin)
+  curve x1 y1 bx by x2 y2 0.8 1  — curved line through control point (bx,by)
+  shape ring cx cy r              — drawn circle outline as pheromone trail, e.g. shape ring 128 128 6
+
+RESPOND EXACTLY in this format:
+COMMANDS:
+<one command from the blueprint — trail, curve, or blob — OR the word DONE if all are built>
+SPEECH: <one sentence: which element you are drawing, or "Blueprint complete." if done>
+
+When all lines are built put DONE on its own line inside COMMANDS. Do not put a trail command when done."""
 
 
 # ── Artist ch5 spatial summary ────────────────────────────────────────────────
@@ -460,71 +499,51 @@ PALETTE_DESCRIPTIONS = {
     'candy_chrome':   'bright multicolor — playful, saturated',
 }
 
-def _spatial_map(rows):
-    """Build a 4×4 zone ASCII map from artist_state.json (written by run_free.py).
-    Each zone is 64×64 grid pixels. Center coords are labeled so Gemini knows where to aim wipes."""
-    import json as _json
+_prev_heatmap = None  # module-level: tracks last heatmap for diff
 
-    _state_path = os.path.join(os.path.dirname(__file__), 'artist_state.json')
-    zones = None
+def _spatial_map(_rows):
+    """16×16 ch5 heatmap from artist_heatmap.npy (written every frame by run_free.py).
+    Each cell = max ch5 in a 16×16 block of the 256×256 grid (0=no trail, 9=full trail).
+    Also shows which cells changed since last turn."""
+    global _prev_heatmap
+
+    _hm_path = os.path.join(os.path.dirname(__file__), 'artist_heatmap.npy')
     try:
-        with open(_state_path) as _f:
-            zones = _json.load(_f)['zones']
+        heatmap = np.load(_hm_path)
     except Exception:
-        pass
-
-    def _density(d):
-        # d = fraction of pixels that are dark (organism present)
-        if d < 0.05: return '░'   # nearly empty
-        if d < 0.20: return '▒'   # some organisms
-        return '▓'                # dense organisms
-
-    if zones:
-        # Zone centers: x = 32, 96, 160, 224  |  y = 32, 96, 160, 224
-        # Map symbol: rows = y (top→bottom), cols = x (left→right)
-        grid_rows = []
-        for r in range(4):
-            cy = 32 + r * 64
-            cells = []
-            for c in range(4):
-                cx = 32 + c * 64
-                d = zones.get(f'{r}{c}', 0.0)
-                cells.append(f"{_density(d)}({cx:3d},{cy:3d})")
-            grid_rows.append('  │ ' + '  '.join(cells) + ' │')
-
-        lines = ["  Zone map (░=clear ▒=some ▓=dense) — TOP=low y, BOTTOM=high y, LEFT=low x, RIGHT=high x:"]
-        lines.append("  ┌" + "─" * 54 + "┐")
-        for row_line in grid_rows:
-            lines.append(row_line)
-        lines.append("  └" + "─" * 54 + "┘")
-        lines.append("  Spot-wipe a dense zone: wipe <x> <y> 40   Example: wipe 32 32 40")
-        return '\n'.join(lines)
-
-    # Fallback: estimate from CSV rows if zone file not available yet
-    if not rows:
         return None
-    latest = rows[-1]
-    dark  = float(latest.get('dark', 0.5))
-    asym  = float(latest.get('asym', 0))
-    left  = float(latest.get('left_dark', dark))
-    right = float(latest.get('right_dark', dark))
-    top   = dark + asym * 0.3
-    bot   = dark - asym * 0.3
 
-    def _d2(d):
-        if d > 0.8: return '░'
-        if d > 0.5: return '▒'
-        return '▓'
+    scaled = np.clip((heatmap * 10).astype(int), 0, 9)
 
-    tl, tr = _d2((left+top)/2), _d2((right+top)/2)
-    bl, br = _d2((left+bot)/2), _d2((right+bot)/2)
-    return (f"  Grid (estimated — zone file not yet written):\n"
-            f"  ┌──────┬──────┐\n"
-            f"  │  {tl}   │  {tr}   │  y=0-127\n"
-            f"  ├──────┼──────┤\n"
-            f"  │  {bl}   │  {br}   │  y=128-255\n"
-            f"  └──────┴──────┘\n"
-            f"  x=0-127  x=128-255")
+    # Diff from last turn
+    changed_cells = []
+    if _prev_heatmap is not None:
+        prev_scaled = np.clip((_prev_heatmap * 10).astype(int), 0, 9)
+        for r in range(16):
+            for c in range(16):
+                delta = int(scaled[r, c]) - int(prev_scaled[r, c])
+                if abs(delta) >= 2:
+                    cx, cy = c * 16 + 8, r * 16 + 8
+                    changed_cells.append(f"({cx},{cy}){'+' if delta > 0 else ''}{delta}")
+
+    _prev_heatmap = heatmap.copy()
+
+    # Format grid — rows = y (top→bottom), cols = x (left→right)
+    lines = ["  Trail map (ch5): 0=no trail  9=full trail  each cell = 16×16 px  TOP=low y  LEFT=low x"]
+    lines.append("  Col→  0123456789ABCDEF  (x: 8,24,40...248)")
+    for r in range(16):
+        cy = r * 16 + 8
+        row_str = ''.join(str(scaled[r, c]) for c in range(16))
+        lines.append(f"  R{r:02d} y={cy:3d}: {row_str}")
+    lines.append("  Cell(row,col) center: x = col*16+8,  y = row*16+8")
+    lines.append("  Example: R04 col 6 → trail cx=104 cy=72")
+
+    if changed_cells:
+        lines.append(f"  New trail activity this turn: {', '.join(changed_cells[:24])}")
+    elif _prev_heatmap is not None:
+        lines.append("  No significant trail changes since last turn.")
+
+    return '\n'.join(lines)
 
 
 def format_artist_summary(rows, current_palette='unknown'):
@@ -753,6 +772,124 @@ async def run_artist(verbose=False, dry_run=False, provider='gemini', model=None
             print(f"  [ARTIST] API error: {e}")
 
 
+# ── Blueprint mode loop ───────────────────────────────────────────────────────
+
+async def _blueprint_agent(label, call_llm, cmd_file, blueprint_text, dry_run=False):
+    """Single blueprint-building agent loop. Runs until DONE."""
+    with open(cmd_file, 'w') as f:
+        f.write('none')
+
+    history = []
+
+    while True:
+        await asyncio.sleep(ARTIST_STEPS / 60)
+
+        csv_path = find_latest_csv()
+        if csv_path is None:
+            print(f"  [{label}] waiting for run_free.py --blueprint --research to start...")
+            await asyncio.sleep(5)
+            continue
+
+        rows = read_recent_rows(csv_path)
+        if not rows:
+            await asyncio.sleep(3)
+            continue
+
+        summary = format_artist_summary(rows, current_palette='unknown')
+        user_content = (
+            f"BLUEPRINT:\n{blueprint_text}\n\n"
+            f"CURRENT GRID STATE:\n{summary}\n\n"
+            f"Draw one unbuilt element from the blueprint. Check the trail map — "
+            f"if a line/blob's cells already read 7+ it is built, pick a different one. "
+            f"Issue DONE when all elements are visible on the trail map."
+        )
+
+        history.append({"role": "user", "content": user_content})
+        if len(history) > MAX_HISTORY * 2:
+            history = history[-(MAX_HISTORY * 2):]
+
+        if dry_run:
+            print(f"  [{label}] dry-run — no API call")
+            continue
+
+        try:
+            reply = await call_llm(history)
+            history.append({"role": "assistant", "content": reply})
+
+            commands = []
+            in_block = False
+            for line in reply.strip().splitlines():
+                line = line.strip()
+                if line.lower().startswith('commands:'):
+                    in_block = True
+                    continue
+                if line.lower().startswith('speech:'):
+                    in_block = False
+                    continue
+                if in_block and line and not line.startswith('#'):
+                    commands.append(line)
+
+            is_done         = any(c.strip().upper() == 'DONE' for c in commands)
+            active_commands = [c for c in commands if c.strip().upper() != 'DONE']
+
+            if active_commands:
+                with open(cmd_file, 'w') as f:
+                    f.write('COMMANDS:\n' + '\n'.join(active_commands) + '\n')
+
+            if is_done:
+                print(f"  [{label}]  Blueprint complete. Disconnecting.")
+                print(f"{'═'*40}")
+                with open(cmd_file, 'w') as f:
+                    f.write('none')
+                return
+
+            # Clean one-line output per turn
+            for c in active_commands:
+                parts = c.split()
+                brush = parts[0] if parts else ''
+                if brush == 'trail' and len(parts) >= 5:
+                    print(f"  [{label}]  trail ({parts[1]},{parts[2]}) → ({parts[3]},{parts[4]})")
+                elif brush == 'curve' and len(parts) >= 7:
+                    print(f"  [{label}]  curve ({parts[1]},{parts[2]}) → ({parts[5]},{parts[6]})")
+                elif brush == 'shape' and len(parts) >= 4:
+                    print(f"  [{label}]  shape {parts[1]} ({parts[2]},{parts[3]}) r={parts[4] if len(parts) > 4 else '?'}")
+                else:
+                    print(f"  [{label}]  {c}")
+
+        except Exception as e:
+            print(f"  [{label}] API error: {e}")
+
+
+async def run_blueprint(dry_run=False, provider='gemini', model=None):
+    """Blueprint builder. Run one per terminal — gemini uses file A, anthropic uses file B."""
+    try:
+        raw = open(BLUEPRINT_FILE).read()
+    except FileNotFoundError:
+        print(f"ERROR: {BLUEPRINT_FILE} not found.")
+        return
+
+    blueprint_lines = [l for l in raw.splitlines() if l.strip() and not l.strip().startswith('#')]
+    blueprint_text  = '\n'.join(blueprint_lines)
+
+    if provider == 'gemini':
+        label    = 'GEMINI'
+        cmd_file = CMD_FILE_BLUEPRINT
+    else:
+        label    = 'CLAUDE'
+        cmd_file = CMD_FILE_BLUEPRINT_B
+
+    if model is None:
+        model = DEFAULT_MODELS_BLUEPRINT[provider]
+    call_llm = (make_gemini_client if provider == 'gemini' else make_anthropic_client)(
+        model, SYSTEM_PROMPT_BLUEPRINT, max_tokens=400)
+
+    print(f"{'═'*40}")
+    print(f"  {label} — BLUEPRINT MODE")
+    print(f"{'═'*40}")
+
+    await _blueprint_agent(label, call_llm, cmd_file, blueprint_text, dry_run)
+
+
 # ── Main async loop ───────────────────────────────────────────────────────────
 
 async def run(verbose=False, dry_run=False, interval=CHECK_EVERY,
@@ -891,13 +1028,21 @@ if __name__ == '__main__':
     parser.add_argument('--model',    default=None, help='Model override')
     parser.add_argument('--agent',    default=None, choices=['keeper', 'destroyer'],
                         help='Battle mode: keeper or destroyer')
-    parser.add_argument('--artist',   action='store_true',
-                        help='Artist mode: human-in-the-loop Gemini painter')
+    parser.add_argument('--artist',    action='store_true',
+                        help='Artist mode: human-in-the-loop painter')
+    parser.add_argument('--blueprint', action='store_true',
+                        help='Blueprint mode: autonomous builder from blueprint.txt')
     args = parser.parse_args()
 
     if args.artist:
         asyncio.run(run_artist(
             verbose=args.log,
+            dry_run=args.dry_run,
+            provider=args.provider,
+            model=args.model,
+        ))
+    elif args.blueprint:
+        asyncio.run(run_blueprint(
             dry_run=args.dry_run,
             provider=args.provider,
             model=args.model,

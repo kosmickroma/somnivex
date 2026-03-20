@@ -46,8 +46,10 @@ RESEARCH_PALETTE  = 'neon_city'
 CMD_FILE          = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'llm_commands.txt')
 CMD_FILE_KEEPER   = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'llm_commands_keeper.txt')
 CMD_FILE_DESTROYER= os.path.join(os.path.dirname(os.path.abspath(__file__)), 'llm_commands_destroyer.txt')
-CMD_FILE_ARTIST   = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'llm_commands_artist.txt')
-TURN_FILE         = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'battle_turn.txt')
+CMD_FILE_ARTIST     = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'llm_commands_artist.txt')
+CMD_FILE_BLUEPRINT  = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'llm_commands_blueprint.txt')
+CMD_FILE_BLUEPRINT_B= os.path.join(os.path.dirname(os.path.abspath(__file__)), 'llm_commands_blueprint_b.txt')
+TURN_FILE           = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'battle_turn.txt')
 CMD_POLL_EVERY    = 30   # frames between command file checks
 BATTLE_TURN_STEPS = 500   # NCA steps between battle turns (~8s on GPU)
 RESEARCH_RENDER   = 'edges'
@@ -357,13 +359,16 @@ def run():
                         help='Research mode: lock display to cell_wall+edges+vignette, enable auto-logging and state HUD')
     parser.add_argument('--artist', action='store_true',
                         help='Artist mode: poll llm_commands_artist.txt for spatial brush commands from LLM painter')
+    parser.add_argument('--blueprint', action='store_true',
+                        help='Blueprint mode: poll llm_commands_blueprint.txt for autonomous builder commands')
     parser.add_argument('--battle', action='store_true',
                         help='Battle mode: enable keeper/destroyer turn polling')
     args = parser.parse_args()
     global RESEARCH_MODE
-    RESEARCH_MODE = args.research
-    ARTIST_MODE   = args.artist
-    BATTLE_MODE   = args.battle
+    RESEARCH_MODE  = args.research
+    ARTIST_MODE    = args.artist
+    BLUEPRINT_MODE = args.blueprint
+    BATTLE_MODE    = args.battle
 
     if args.gs:
         ckpt  = GS_CHECKPOINT
@@ -497,7 +502,7 @@ def run():
     trail_mode    = False
     trail_drawing = False
     trail_erase   = False
-    trail_mask    = np.zeros((GRID_H, GRID_W), dtype=bool)
+    trail_mask    = np.zeros((GRID_H, GRID_W), dtype=np.float32)  # per-cell ch5 strength (0=no trail)
     trail_strength = 0.8    # injected ch5 value — [ / ] to adjust
     TRAIL_BRUSH   = 3        # brush radius in grid cells
     jtrail        = jnp.zeros((GRID_H, GRID_W), dtype=bool)
@@ -788,8 +793,8 @@ def run():
                         print(f"Trail strength: {trail_strength:.3f}")
 
                 if event.key == pygame.K_n:
-                    trail_mask[:] = False
-                    jtrail = jnp.zeros((GRID_H, GRID_W), dtype=bool)
+                    trail_mask[:] = 0.0
+                    jtrail = jnp.zeros((GRID_H, GRID_W), dtype=np.float32)
                     print("Trail cleared")
 
                 if event.key == pygame.K_k:
@@ -910,7 +915,7 @@ def run():
                 gy = int(my * GRID_H / DISPLAY_H)
                 y0 = max(0, gy - TRAIL_BRUSH); y1 = min(GRID_H, gy + TRAIL_BRUSH + 1)
                 x0 = max(0, gx - TRAIL_BRUSH); x1 = min(GRID_W, gx + TRAIL_BRUSH + 1)
-                trail_mask[y0:y1, x0:x1] = not trail_erase
+                trail_mask[y0:y1, x0:x1] = 0.0 if trail_erase else trail_strength
                 jtrail = jnp.array(trail_mask)
 
             if event.type == pygame.MOUSEMOTION and trail_drawing:
@@ -919,7 +924,7 @@ def run():
                 gy = int(my * GRID_H / DISPLAY_H)
                 y0 = max(0, gy - TRAIL_BRUSH); y1 = min(GRID_H, gy + TRAIL_BRUSH + 1)
                 x0 = max(0, gx - TRAIL_BRUSH); x1 = min(GRID_W, gx + TRAIL_BRUSH + 1)
-                trail_mask[y0:y1, x0:x1] = not trail_erase
+                trail_mask[y0:y1, x0:x1] = 0.0 if trail_erase else trail_strength
                 jtrail = jnp.array(trail_mask)
 
             # ── Mouse click — stamp attractor seed ────────────────────────────
@@ -992,17 +997,17 @@ def run():
             if np.any(wall_mask):
                 grid = grid.at[:, :, CH_A].set(jnp.where(jwall, 1.0, grid[:, :, CH_A]))
                 grid = grid.at[:, :, CH_B].set(jnp.where(jwall, 0.0, grid[:, :, CH_B]))
-            # Trail injection — force ch5 to trail_strength on painted cells every step
+            # Trail injection — force ch5 to per-cell stored value every step
             if np.any(trail_mask):
-                grid = grid.at[:, :, 5].set(jnp.where(jtrail, trail_strength, grid[:, :, 5]))
+                grid = grid.at[:, :, 5].set(jnp.where(jtrail > 0, jtrail, grid[:, :, 5]))
             # Trail drift — shift trail toward target direction every DRIFT_INTERVAL steps
             if (trail_drift_x != 0 or trail_drift_y != 0) and step_count % DRIFT_INTERVAL == 0:
                 trail_mask = np.roll(trail_mask, shift=(trail_drift_y, trail_drift_x), axis=(0, 1))
                 # Zero out wrapped edges so trail doesn't teleport
-                if trail_drift_x > 0:  trail_mask[:, :trail_drift_x] = False
-                elif trail_drift_x < 0: trail_mask[:, trail_drift_x:] = False
-                if trail_drift_y > 0:  trail_mask[:trail_drift_y, :] = False
-                elif trail_drift_y < 0: trail_mask[trail_drift_y:, :] = False
+                if trail_drift_x > 0:  trail_mask[:, :trail_drift_x] = 0.0
+                elif trail_drift_x < 0: trail_mask[:, trail_drift_x:] = 0.0
+                if trail_drift_y > 0:  trail_mask[:trail_drift_y, :] = 0.0
+                elif trail_drift_y < 0: trail_mask[trail_drift_y:, :] = 0.0
                 jtrail = jnp.array(trail_mask)
             step_count += 1
 
@@ -1063,6 +1068,24 @@ def run():
                     _json.dump({'zones': _zones, 'step': step_count}, _azf)
                 _ss_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'artist_screenshot.png')
                 pygame.image.save(screen, _ss_path)
+                # Write 16x16 ch5 heatmap for decode.py
+                _ch5 = _grid_np[:,:,5]
+                _heatmap = np.zeros((16,16), dtype=np.float32)
+                for _hr in range(16):
+                    for _hc in range(16):
+                        _heatmap[_hr,_hc] = float(np.max(_ch5[_hr*16:(_hr+1)*16, _hc*16:(_hc+1)*16]))
+                _hm_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'artist_heatmap.npy')
+                np.save(_hm_path, _heatmap)
+
+        # ── Artist heatmap — always write when in artist mode ────────────
+        if ARTIST_MODE and np.any(trail_mask):
+            _ch5_hm = np.array(grid[:,:,5])
+            _heatmap_now = np.zeros((16,16), dtype=np.float32)
+            for _hr in range(16):
+                for _hc in range(16):
+                    _heatmap_now[_hr,_hc] = float(np.max(_ch5_hm[_hr*16:(_hr+1)*16, _hc*16:(_hc+1)*16]))
+            _hm_path_now = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'artist_heatmap.npy')
+            np.save(_hm_path_now, _heatmap_now)
 
         # ── Spatial field phase drift ─────────────────────────────────────
         # Advance all four phases by their individual velocities each frame.
@@ -1271,7 +1294,7 @@ def run():
                     _g = np.array(grid[:,:,5])
                     for (gy,gx) in cells:
                         _g[gy,gx] = strength
-                        trail_mask[gy,gx] = True
+                        trail_mask[gy,gx] = strength
                     grid.__class__  # touch nonlocal
                     return _g, strength
 
@@ -1285,7 +1308,7 @@ def run():
                             mx0,mx1 = (GRID_W-1-x0,GRID_W-1-x1) if mirror else (x0,x1)
                             for (gy,gx) in _bresenham_cells(mx0,y0,mx1,y1,brush=width):
                                 _g[gy,gx] = strength
-                                trail_mask[gy,gx] = True
+                                trail_mask[gy,gx] = strength
                         grid = grid.at[:,:,5].set(jnp.array(_g))
                         jtrail = jnp.array(trail_mask)
                         print(f"  [{_label}] trail ({x0},{y0})→({x1},{y1}) str={strength:.2f} width={width}")
@@ -1337,7 +1360,7 @@ def run():
                                         ny,nx = gy+dy, gx+dx
                                         if 0<=ny<GRID_H and 0<=nx<GRID_W:
                                             _g[ny,nx] = strength
-                                            trail_mask[ny,nx] = True
+                                            trail_mask[ny,nx] = strength
                         grid = grid.at[:,:,5].set(jnp.array(_g))
                         jtrail = jnp.array(trail_mask)
                         print(f"  [{_label}] curve ({px0},{py0})→bend({pbx},{pby})→({px1},{py1}) str={strength:.2f} width={width}")
@@ -1350,7 +1373,7 @@ def run():
                         for mirror in ([False,True] if artist_mirror else [False]):
                             mcx = GRID_W-1-cx if mirror else cx
                             for (gy,gx) in _circle_cells(mcx,cy,r):
-                                if trail_mask[gy,gx]:
+                                if trail_mask[gy,gx] > 0:
                                     continue   # never kill trail cells
                                 _g_np[gy,gx,0] = 1.0
                                 _g_np[gy,gx,1] = 0.0
@@ -1369,7 +1392,7 @@ def run():
                         # Build mask: cells to wipe = in rect AND not on trail
                         _wipe_region = np.zeros((GRID_H, GRID_W), dtype=bool)
                         _wipe_region[ry0:ry1, rx0:rx1] = True
-                        _wipe_region &= ~trail_mask   # protect trail cells
+                        _wipe_region &= (trail_mask == 0)   # protect trail cells
                         _g_np[_wipe_region, 0] = 1.0
                         _g_np[_wipe_region, 1] = 0.0
                         _g_np[_wipe_region, 2:14] = 0.0
@@ -1393,8 +1416,8 @@ def run():
                         print(f"  [{_label}] blob ({bx},{by}) str={strength:.2f} r={r}")
 
                 elif _brush == 'clear_trails':
-                    trail_mask[:] = False
-                    jtrail = jnp.zeros((GRID_H, GRID_W), dtype=bool)
+                    trail_mask[:] = 0.0
+                    jtrail = jnp.zeros((GRID_H, GRID_W), dtype=jnp.float32)
                     _g = np.array(grid[:,:,5])
                     _g[:] = 0.0
                     grid = grid.at[:,:,5].set(jnp.array(_g))
@@ -1426,13 +1449,13 @@ def run():
                             if shape_type == 'circle':
                                 for (gy,gx) in _circle_cells(mcx,cy,r):
                                     _g_a[gy,gx] = 0.5; _g_b[gy,gx] = 0.5
-                                    _g_ch5[gy,gx] = 0.8; trail_mask[gy,gx] = True
+                                    _g_ch5[gy,gx] = 0.8; trail_mask[gy,gx] = 0.8
                             elif shape_type == 'ring':
                                 for (gy,gx) in _circle_cells(mcx,cy,r):
                                     d = np.sqrt((gy-cy)**2+(gx-mcx)**2)
                                     if d >= r-3:
                                         _g_a[gy,gx] = 0.3; _g_b[gy,gx] = 0.6
-                                        _g_ch5[gy,gx] = 0.8; trail_mask[gy,gx] = True
+                                        _g_ch5[gy,gx] = 0.8; trail_mask[gy,gx] = 0.8
                             elif shape_type == 'spiral':
                                 for angle in np.linspace(0, 4*np.pi, 300):
                                     rad = r * angle / (4*np.pi)
@@ -1440,7 +1463,7 @@ def run():
                                     gy = int(cy  + rad*np.sin(angle))
                                     if 0<=gy<GRID_H and 0<=gx<GRID_W:
                                         _g_a[gy,gx] = 0.3; _g_b[gy,gx] = 0.5
-                                        _g_ch5[gy,gx] = 0.8; trail_mask[gy,gx] = True
+                                        _g_ch5[gy,gx] = 0.8; trail_mask[gy,gx] = 0.8
                             elif shape_type == 'arc':
                                 # shape arc cx cy r a_start a_end  (degrees, 0=right, 90=down)
                                 if len(_parts) >= 7:
@@ -1456,7 +1479,7 @@ def run():
                                                 ny,nx = gy+dy, gx+dx
                                                 if 0<=ny<GRID_H and 0<=nx<GRID_W:
                                                     _g_a[ny,nx] = 0.3; _g_b[ny,nx] = 0.6
-                                                    _g_ch5[ny,nx] = 0.8; trail_mask[ny,nx] = True
+                                                    _g_ch5[ny,nx] = 0.8; trail_mask[ny,nx] = 0.8
                         grid = grid.at[:,:,0].set(jnp.array(_g_a))
                         grid = grid.at[:,:,1].set(jnp.array(_g_b))
                         grid = grid.at[:,:,5].set(jnp.array(_g_ch5))
@@ -1556,6 +1579,64 @@ def run():
                         _cf.write('none')
             except Exception as _e:
                 print(f"  [ARTIST] poll error: {_e}")
+
+        # ── Blueprint mode command polling ────────────────────────────────
+        if BLUEPRINT_MODE and step_count % CMD_POLL_EVERY == 0 and os.path.exists(CMD_FILE_BLUEPRINT):
+            try:
+                with open(CMD_FILE_BLUEPRINT, 'r') as _cf:
+                    _raw = _cf.read().strip()
+                if _raw and _raw.lower() != 'none':
+                    _lines = []
+                    _in_block = False
+                    for _line in _raw.splitlines():
+                        _line = _line.strip()
+                        if _line.lower().startswith('commands:'):
+                            _in_block = True
+                            continue
+                        if _line.lower().startswith('speech:'):
+                            _speech = _line.split(':', 1)[1].strip()
+                            print(f"  [BLUEPRINT] {_speech}")
+                            continue
+                        if _in_block and _line and not _line.startswith('#'):
+                            _lines.append(_line)
+                        elif not _in_block and _line and not _line.startswith('#'):
+                            _lines.append(_line)
+                    for _acmd in _lines:
+                        if _acmd.lower() != 'none':
+                            _execute_llm_command(_acmd.lower(), 'BLUEPRINT')
+                    with open(CMD_FILE_BLUEPRINT, 'w') as _cf:
+                        _cf.write('none')
+            except Exception as _e:
+                print(f"  [BLUEPRINT] poll error: {_e}")
+
+        # ── Blueprint B command polling ────────────────────────────────────
+        if BLUEPRINT_MODE and step_count % CMD_POLL_EVERY == 0 and os.path.exists(CMD_FILE_BLUEPRINT_B):
+            try:
+                with open(CMD_FILE_BLUEPRINT_B, 'r') as _cf:
+                    _raw = _cf.read().strip()
+                if _raw and _raw.lower() != 'none':
+                    _lines = []
+                    _in_block = False
+                    for _line in _raw.splitlines():
+                        _line = _line.strip()
+                        if _line.lower().startswith('commands:'):
+                            _in_block = True
+                            continue
+                        if _line.lower().startswith('speech:'):
+                            _speech = _line.split(':', 1)[1].strip()
+                            print(f"  [BLUEPRINT-B] {_speech}")
+                            continue
+                        if _in_block and _line and not _line.startswith('#'):
+                            _lines.append(_line)
+                        elif not _in_block and _line and not _line.startswith('#'):
+                            _lines.append(_line)
+                    for _acmd in _lines:
+                        if _acmd.lower() != 'none':
+                            _execute_llm_command(_acmd.lower(), 'BP-B')
+                    with open(CMD_FILE_BLUEPRINT_B, 'w') as _cf:
+                        _cf.write('none')
+            except Exception as _e:
+                print(f"  [BLUEPRINT-B] poll error: {_e}")
 
         # ── Battle mode command polling ───────────────────────────────────
         if BATTLE_MODE and step_count % CMD_POLL_EVERY == 0:

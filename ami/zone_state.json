@@ -1,9 +1,10 @@
 {
-  "step": 6250,
-  "zone_a": 0.1457688957452774,
-  "zone_b": 0.04491988196969032,
-  "gap": 0.03771393001079559,
+  "step": 6550,
+  "zone_a": 0.13490526378154755,
+  "zone_b": 0.13122132420539856,
+  "gap": 0.025044342502951622,
   "bridge_fired": true,
-  "zone_b_activated": false,
+  "zone_b_activated": true,
+  "signal_id": "0ce6a628-eca8-4a74-a693-e8ab22c9a745",
   "threshold": 0.052
 }

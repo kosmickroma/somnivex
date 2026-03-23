@@ -68,7 +68,9 @@
       "Bash(git restore:*)",
       "Bash(git rm:*)",
       "Bash(ls:*)",
-      "Bash(find /home/kk/projects/ml/somnivex -type f -name *.py -o -name *.md -o -name *.txt -o -name *.json)"
+      "Bash(find /home/kk/projects/ml/somnivex -type f -name *.py -o -name *.md -o -name *.txt -o -name *.json)",
+      "Bash(python -c \":*)",
+      "Bash(python ami/generate_data.py --runs 5 --steps 300 --out ami/training_data_test)"
     ]
   }
 }

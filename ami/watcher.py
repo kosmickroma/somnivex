@@ -15,6 +15,7 @@
 import time
 import json
 import re
+import uuid
 from pathlib import Path
 from datetime import datetime
 
@@ -45,14 +46,16 @@ def extract_topic(text):
 
 
 def fire_signal(topic):
+    signal_id = str(uuid.uuid4())
     trigger = {
-        "topic":    topic,
-        "fired_at": datetime.now().isoformat(),
-        "consumed": False
+        "signal_id": signal_id,
+        "topic":     topic,
+        "fired_at":  datetime.now().isoformat(),
+        "consumed":  False
     }
     TRIGGER_FILE.write_text(json.dumps(trigger, indent=2))
     print(f"\n  [watcher] >>> TOPIC DETECTED: '{topic}'")
-    print(f"  [watcher] >>> Signal fired — NCA routing...")
+    print(f"  [watcher] >>> Signal ID: {signal_id[:8]}... — NCA routing...")
 
 
 def main():

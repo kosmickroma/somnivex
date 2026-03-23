@@ -48,3 +48,79 @@ TIME  : 2026-03-23 12:32:32
 - **"Autonomous weapons systems regulation"** – UN and international law discussions
 - **"AI geopolitics" + specific regions** (Indo-Pacific, Europe) – strategic implications by region
 ============================================================
+
+============================================================
+TOPIC : quantum computing
+TIME  : 2026-03-23 12:58:45
+============================================================
+# Quantum Computing Now
+
+**One-sentence summary:**
+Quantum computers have moved from theoretical promise to early practical demonstrations, with major tech companies and startups racing to build machines that can solve real-world problems faster than classical computers.
+
+## Key developments:
+
+1. **NISQ era limitations** — Current "Noisy Intermediate-Scale Quantum" (NISQ) devices have 50-1000 qubits but high error rates, limiting their practical advantage to specific problem types rather than general computing
+
+2. **Error correction breakthroughs** — Google's 2023 Willow chip showed progress toward quantum error correction at scale, a critical milestone for building reliable large systems
+
+3. **Hybrid approaches dominating** — Most near-term applications combine quantum and classical computing (quantum processors for specific tasks, classical for the rest), not wholesale replacement of classical systems
+
+4. **Industry-specific focus** — Real momentum is in drug discovery, materials science, and optimization problems; less hype, more actual use cases
+
+## Search for:
+
+- **"Quantum advantage" or "quantum supremacy"** — understand what problems quantum computers actually beat classical ones on
+- **Error correction in quantum computing** — the technical bottleneck everyone is working on
+- **NISQ algorithms** — what can actually run on today's hardware (Variational Quantum Eigensolver, QAOA)
+============================================================
+
+============================================================
+TOPIC : machine learning
+TIME  : 2026-03-23 13:11:59
+============================================================
+# Machine Learning: Current Snapshot
+
+**One-sentence summary:** Machine learning has moved from research labs into production systems across industries, but is now grappling with scaling costs, data quality constraints, and questions about whether current approaches can achieve artificial general intelligence.
+
+## Key Developments
+
+1. **Large language models dominating the conversation** — GPT-4, Claude, and open-source alternatives like Llama have shifted focus toward scale and emergent capabilities, making transformer-based models the de facto standard.
+
+2. **Efficiency becoming critical** — Rising computational costs have sparked intense interest in model quantization, distillation, and pruning techniques to make ML more practical and sustainable.
+
+3. **Multimodal AI gaining ground** — Systems combining vision, language, and other modalities are proving more useful for real-world applications than single-modality models.
+
+4. **Data quality over data quantity** — The limiting factor is increasingly clean, relevant training data rather than model size—driving interest in synthetic data, data curation, and few-shot learning.
+
+## Worth Searching For
+
+- **"Machine learning in production" / MLOps** — How teams actually deploy and maintain models at scale
+- **"Prompt engineering" or "retrieval-augmented generation (RAG)"** — Practical techniques for getting value from existing models without retraining
+- **"AI alignment" or "mechanistic interpretability"** — Safety concerns and efforts to understand why models behave as they do
+============================================================
+
+============================================================
+TOPIC : dark matter
+TIME  : 2026-03-23 13:22:36
+============================================================
+# Dark Matter Research Status
+
+**Current state:** Dark matter remains undetected despite decades of searching, with leading candidates (WIMPs, axions) still unconfirmed and alternative theories gaining credibility.
+
+## Key developments
+
+1. **WIMP searches hitting diminishing returns** — Direct detection experiments haven't found WIMPs at predicted sensitivity levels, shifting focus toward axions and other candidates
+
+2. **Modified gravity theories gaining traction** — MOND and relativistic variants are explaining some observations without invoking dark matter, forcing refinement of both approaches
+
+3. **Cosmological surveys refining the picture** — James Webb and Vera Rubin Observatory data are constraining dark matter distribution and behavior in ways that challenge existing models
+
+4. **Quantum axion detectors advancing** — ADMX and similar experiments have improved sensitivity, making axion detection more feasible than previously thought
+
+## Worth searching for
+
+- **"Direct detection dark matter 2024"** — Current experimental limits and what they rule out
+- **"MOND vs dark matter"** — Clearer comparison of alternative explanations
+- **"Axion Dark Matter Experiment results"** — Most promising current detection avenue
+============================================================

@@ -62,7 +62,7 @@ def main():
     print(f"[responder] Results will appear in ami/results.txt")
     print()
 
-    last_topic = None
+    last_signal_id = None
 
     while True:
         try:
@@ -74,31 +74,50 @@ def main():
             trigger = json.loads(TRIGGER_FILE.read_text())
             state   = json.loads(ZONE_STATE.read_text())
 
-            # Skip if consumed
+            # Skip if already consumed
             if trigger.get("consumed"):
                 time.sleep(0.5)
                 continue
 
-            topic = trigger.get("topic")
-            if not topic or topic == last_topic:
+            topic     = trigger.get("topic")
+            signal_id = trigger.get("signal_id")
+
+            if not topic or not signal_id:
                 time.sleep(0.5)
                 continue
 
-            # Wait for NCA to actually route — zone B must activate
-            zone_b_activated = state.get("zone_b_activated", False)
-            zone_b_val       = state.get("zone_b", 0)
+            # Skip if we already handled this signal
+            if signal_id == last_signal_id:
+                time.sleep(0.5)
+                continue
+
+            # Wait for NCA to physically route this signal through the substrate.
+            # zone_b_activated must be True AND the signal_id in zone_state must
+            # match the signal_id from the trigger. This proves Zone B activated
+            # because of THIS signal traveling through the NCA — not stale state.
+            zone_b_activated    = state.get("zone_b_activated", False)
+            zone_state_id       = state.get("signal_id")
+            zone_b_val          = state.get("zone_b", 0)
 
             if not zone_b_activated:
                 time.sleep(0.5)
                 continue
 
-            # Zone B activated — NCA routed the signal — now call LLM
-            print(f"\n  [responder] NCA routed signal — Zone B={zone_b_val:.3f}")
+            if zone_state_id != signal_id:
+                # zone_b_activated is True but from a different signal — stale state
+                print(f"  [responder] Waiting — zone_state signal_id mismatch "
+                      f"(got {str(zone_state_id)[:8] if zone_state_id else 'None'}, "
+                      f"want {str(signal_id)[:8]})")
+                time.sleep(0.5)
+                continue
+
+            # IDs match — Zone B activated because this signal traveled through the NCA
+            print(f"\n  [responder] Signal {str(signal_id)[:8]}... reached Zone B={zone_b_val:.3f}")
             print(f"  [responder] Topic: '{topic}'")
 
             trigger["consumed"] = True
             TRIGGER_FILE.write_text(json.dumps(trigger, indent=2))
-            last_topic = topic
+            last_signal_id = signal_id
 
             result = call_claude(topic)
             write_results(topic, result)

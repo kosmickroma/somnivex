@@ -67,7 +67,8 @@
       "Bash(git -C /home/kk/projects/ml/somnivex show 534b5de --stat)",
       "Bash(git restore:*)",
       "Bash(git rm:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(find /home/kk/projects/ml/somnivex -type f -name *.py -o -name *.md -o -name *.txt -o -name *.json)"
     ]
   }
 }

@@ -1,0 +1,9 @@
+{
+  "step": 6250,
+  "zone_a": 0.1457688957452774,
+  "zone_b": 0.04491988196969032,
+  "gap": 0.03771393001079559,
+  "bridge_fired": true,
+  "zone_b_activated": false,
+  "threshold": 0.052
+}

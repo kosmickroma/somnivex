@@ -1,4 +1,24 @@
-# Somnivex — TODO (updated 2026-03-19)
+# Axon — TODO (updated 2026-03-22)
+
+## ✅ COMPLETED TODAY — LLM/NCA Mesh POC
+
+- [x] Two-session mesh demo built and recorded:
+      Claude (Anthropic) encodes blueprint into NCA grid → exits
+      Gemini (Google) reads NCA grid cold → builds entire blueprint
+      Zero direct communication between models. NCA is the only link.
+- [x] --inject mode: encodes blueprint as dim ghost + saves ghost_commands.txt, auto-exits
+- [x] --build mode: loads task from ghost_commands.txt + reads heatmap for completion state
+- [x] shape ring now accepts strength param — rings inject at dim (0.15) same as trails
+- [x] brush=0 for ghost injection — thin 1px lines, no cell bleed, accurate heatmap reading
+- [x] Terminal output shows actual model IDs + raw coordinate preview as proof of no linking
+
+## 🔥 NEXT — Mesh Refinement
+
+- [ ] Encode task ORDER into ghost_commands.txt — currently Gemini does rings before trails
+      (or encode task type so Gemini reads "do trails first" from the NCA data itself)
+- [ ] Strip system prompt to bare minimum — just command syntax, everything else from NCA
+- [ ] Batch API calls — one call per N commands instead of one per command (cost/speed)
+- [ ] Collect 500+ JSONL training sessions → local model that reads NCA natively
 
 ## Immediate — Priority
 

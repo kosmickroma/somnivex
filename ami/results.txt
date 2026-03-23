@@ -1,0 +1,50 @@
+
+============================================================
+TOPIC : AI in global politics
+TIME  : 2026-03-23 12:11:23
+============================================================
+# AI in Global Politics
+
+**One-sentence summary:**
+AI is reshaping geopolitics through autonomous weapons development, election interference capabilities, and great power competition between the US, China, and EU over standard-setting and dominance.
+
+**Key developments:**
+
+1. **Great power AI race** – US-China competition for AI supremacy mirrors Cold War dynamics; China leads in some applications (facial recognition, surveillance), US in others (large language models, semiconductors)
+
+2. **Governance vacuum** – No binding international AI regulations exist; UN, G7, and bilateral talks are underway but enforcement remains unclear
+
+3. **Election & information warfare** – Deepfakes, chatbots, and algorithmic disinformation are now standard tools; 2024 elections saw significant AI-generated content manipulation
+
+4. **Autonomous weapons concerns** – Military AI deployment (drones, targeting systems) is accelerating without clear rules; killer robot treaties remain unsigned
+
+**Specific searches:**
+- "AI arms control negotiations" – treaties and proposals in motion
+- "China vs US AI dominance" – competitive landscape and implications
+- "Algorithmic disinformation 2024 elections" – concrete recent examples
+============================================================
+
+============================================================
+TOPIC : AI in global politics
+TIME  : 2026-03-23 12:32:32
+============================================================
+# AI in Global Politics
+
+**Current State:** AI is reshaping political power dynamics, election integrity, and geopolitical competition, with no global governance framework yet in place.
+
+## Key Developments
+
+1. **Great Power Competition** – US, China, and EU are in an AI race with geopolitical implications; China leads in surveillance AI, US in military applications, EU in regulation-first approach
+
+2. **Election Interference** – Deepfakes, disinformation bots, and AI-generated content are becoming scalable tools for manipulating elections and public opinion across democracies
+
+3. **Autonomous Weapons & Military AI** – Nations are developing lethal autonomous weapons with minimal human oversight, raising both strategic instability and humanitarian concerns
+
+4. **Regulatory Fragmentation** – EU's AI Act, US sector-specific rules, and China's content controls create a splintered global landscape affecting tech governance
+
+## Search These
+
+- **"AI and information warfare"** – how state actors use AI for influence campaigns
+- **"Autonomous weapons systems regulation"** – UN and international law discussions
+- **"AI geopolitics" + specific regions** (Indo-Pacific, Europe) – strategic implications by region
+============================================================

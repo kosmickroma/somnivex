@@ -363,14 +363,43 @@ def run():
                         help='Blueprint mode: poll llm_commands_blueprint.txt for autonomous builder commands')
     parser.add_argument('--battle', action='store_true',
                         help='Battle mode: enable keeper/destroyer turn polling')
+    parser.add_argument('--checkpoint', type=str, default=None,
+                        help='Load a specific checkpoint by name (without .pkl), e.g. mycelium_p2_060000')
+    parser.add_argument('--routing', type=str, default=None,
+                        help='Load a RoutingNet checkpoint by name (without .pkl), e.g. routing_060000. '
+                             'Runs alongside frozen main NCA — adds ch5/ch6 routing on top.')
+    parser.add_argument('--routing-strength', type=float, default=1.0,
+                        help='Multiplier on RoutingNet ch5 output (default 1.0). '
+                             'Lower = fainter paths, higher = stickier. Can also be changed live with [ and ] keys.')
+    parser.add_argument('--grid', type=int, default=None,
+                        help='Override grid size NxN (default 256). E.g. --grid 512')
     args = parser.parse_args()
-    global RESEARCH_MODE
+    global RESEARCH_MODE, GRID_H, GRID_W
+    if args.grid is not None:
+        GRID_H = args.grid
+        GRID_W = args.grid
+        print(f"Grid size overridden: {GRID_H}×{GRID_W}")
     RESEARCH_MODE  = args.research
     ARTIST_MODE    = args.artist
     BLUEPRINT_MODE = args.blueprint
     BATTLE_MODE    = args.battle
 
-    if args.gs:
+    # Clear stale command files and heatmap on startup
+    if BLUEPRINT_MODE:
+        for _f in [CMD_FILE_BLUEPRINT, CMD_FILE_BLUEPRINT_B]:
+            with open(_f, 'w') as _cf:
+                _cf.write('none')
+    if ARTIST_MODE:
+        with open(CMD_FILE_ARTIST, 'w') as _cf:
+            _cf.write('none')
+    if ARTIST_MODE or BLUEPRINT_MODE:
+        _hm_init = np.zeros((16, 16), dtype=np.float32)
+        np.save(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'artist_heatmap.npy'), _hm_init)
+
+    if args.checkpoint:
+        ckpt  = os.path.join(os.path.dirname(__file__), 'checkpoints', f'{args.checkpoint}.pkl')
+        label = args.checkpoint
+    elif args.gs:
         ckpt  = GS_CHECKPOINT
         label = "GS-only (gs_only_100000)"
     elif args.physarum:
@@ -397,6 +426,35 @@ def run():
     update_net        = UpdateNet()
     perception_kernel = make_perception_kernel()
     step_fn           = make_step_fn(update_net, perception_kernel)
+
+    # ── RoutingNet (optional) ──────────────────────────────────────────
+    routing_params = None
+    routing_net    = None
+    if args.routing:
+        _ckpt_dir = os.path.join(os.path.dirname(__file__), 'checkpoints')
+        _rpath    = os.path.join(_ckpt_dir, f'{args.routing}.pkl')
+        if not os.path.exists(_rpath):
+            print(f"RoutingNet checkpoint not found: {_rpath}")
+            sys.exit(1)
+        import sys as _sys
+        _mycelium = os.path.join(os.path.dirname(os.path.dirname(
+                        os.path.dirname(os.path.abspath(__file__)))), 'mycelium')
+        if _mycelium not in _sys.path:
+            _sys.path.insert(0, _mycelium)
+        from routing_net import RoutingNet as _RoutingNet
+        from nca.model import perceive as _perceive
+        routing_net = _RoutingNet()
+        with open(_rpath, 'rb') as _f:
+            routing_params = jax.device_put(pickle.load(_f))
+        print(f"RoutingNet loaded: {_rpath}")
+        print("  → ch5/ch6 routing active alongside frozen main NCA")
+
+    # Routing node state — list of (cy, cx) for each dropped node
+    _routing_nodes    = []
+    _routing_step     = 0
+    _ROUTE_WIDTH      = 6.0   # corridor Gaussian width (px) — match train_routing.py
+    _ROUTE_STRENGTH   = 0.8
+    _routing_strength = args.routing_strength  # live-adjustable via , and . keys
 
     # ── Starting regime ───────────────────────────────────────────────────
     regime_names  = list(GS_REGIMES.keys())
@@ -712,6 +770,14 @@ def run():
                     steps_per_frame = max(steps_per_frame - 1, 1)
                     print(f"Speed: {steps_per_frame} steps/frame")
 
+                if event.key == pygame.K_COMMA and routing_params is not None:
+                    _routing_strength = max(0.0, _routing_strength - 0.1)
+                    print(f"Routing strength: {_routing_strength:.1f}")
+
+                if event.key == pygame.K_PERIOD and routing_params is not None:
+                    _routing_strength = round(_routing_strength + 0.1, 1)
+                    print(f"Routing strength: {_routing_strength:.1f}")
+
                 if event.key == pygame.K_m:
                     render_mode_idx = (render_mode_idx + 1) % len(NCA_RENDER_MODES)
                     render_mode     = NCA_RENDER_MODES[render_mode_idx]
@@ -987,6 +1053,46 @@ def run():
             print(f"FREE CHANNELS ACTIVE — ch13 released. Model controls its own physics bit. f/k still injected.")
         for _ in range(steps_per_frame):
             grid, key = step_fn(grid, params, key)
+            # RoutingNet: analytical ch6 waves + learned ch5 path writing
+            if routing_params is not None:
+                _routing_step += 1
+                # Build corridor ch6 signal for RoutingNet perception only.
+                # NEVER written to the real grid — main NCA never sees it.
+                # Forcing ch6 into the live grid disrupts creature dynamics.
+                _grid_for_routing = grid
+                if len(_routing_nodes) >= 2:
+                    _H, _W = grid.shape[0], grid.shape[1]
+                    _gy, _gx = np.meshgrid(np.arange(_H, dtype=np.float32),
+                                           np.arange(_W, dtype=np.float32),
+                                           indexing='ij')
+                    _ch6 = np.zeros((_H, _W), dtype=np.float32)
+                    for _ni in range(len(_routing_nodes) - 1):
+                        _cy1, _cx1 = _routing_nodes[_ni]
+                        _cy2, _cx2 = _routing_nodes[_ni + 1]
+                        _dy, _dx   = float(_cy2 - _cy1), float(_cx2 - _cx1)
+                        _len = np.sqrt(_dy**2 + _dx**2)
+                        if _len < 1:
+                            continue
+                        _uy, _ux = _dy / _len, _dx / _len
+                        _t   = np.clip((_gy - _cy1) * _uy + (_gx - _cx1) * _ux,
+                                       0.0, _len)
+                        _dist = np.sqrt((_gy - _cy1 - _t * _uy)**2 +
+                                        (_gx - _cx1 - _t * _ux)**2)
+                        _corr = _ROUTE_STRENGTH * np.exp(
+                            -_dist**2 / (2 * _ROUTE_WIDTH**2))
+                        _ch6  = np.maximum(_ch6, _corr)
+                    # Synthetic ch6 only for RoutingNet — real grid untouched
+                    _grid_for_routing = grid.at[:, :, 6].set(
+                        jnp.array(np.clip(_ch6, 0, 1)))
+                # RoutingNet reads synthetic corridor, writes ch5 to real grid
+                key, _sk = random.split(key)
+                _perc    = _perceive(_grid_for_routing, perception_kernel)
+                _rout    = routing_net.apply(routing_params, _perc)  # (H, W, 2)
+                _H, _W   = grid.shape[0], grid.shape[1]
+                _fire    = (random.uniform(_sk, (_H, _W, 1)) < 0.5).astype(jnp.float32)
+                _delta   = jnp.zeros_like(grid)
+                _delta   = _delta.at[:, :, 5].add(_rout[:, :, 0] * _routing_strength)  # ch5
+                grid     = jnp.clip(grid + _delta * _fire, 0.0, 1.0)
             # Always keep f/k injected — life support
             grid = grid.at[:, :, CH_F].set(jf_field)
             grid = grid.at[:, :, CH_K].set(jk_field)
@@ -1077,13 +1183,16 @@ def run():
                 _hm_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'artist_heatmap.npy')
                 np.save(_hm_path, _heatmap)
 
-        # ── Artist heatmap — always write when in artist mode ────────────
-        if ARTIST_MODE and np.any(trail_mask):
-            _ch5_hm = np.array(grid[:,:,5])
+        # ── Artist/Blueprint heatmap — read from trail_mask not ch5 ──────────
+        # trail_mask stores exactly what was injected at what strength.
+        # Reading ch5 picks up NCA's own physics and drowns out dim (0.15) signals.
+        if ARTIST_MODE or BLUEPRINT_MODE:
+            _cell = GRID_H // 16  # 16px for 256 grid, 32px for 512 grid
             _heatmap_now = np.zeros((16,16), dtype=np.float32)
-            for _hr in range(16):
-                for _hc in range(16):
-                    _heatmap_now[_hr,_hc] = float(np.max(_ch5_hm[_hr*16:(_hr+1)*16, _hc*16:(_hc+1)*16]))
+            if np.any(trail_mask):
+                for _hr in range(16):
+                    for _hc in range(16):
+                        _heatmap_now[_hr,_hc] = float(np.max(trail_mask[_hr*_cell:(_hr+1)*_cell, _hc*_cell:(_hc+1)*_cell]))
             _hm_path_now = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'artist_heatmap.npy')
             np.save(_hm_path_now, _heatmap_now)
 
@@ -1288,9 +1397,10 @@ def run():
                     if len(_parts) < 5: return
                     x0,y0,x1,y1 = int(_parts[1]),int(_parts[2]),int(_parts[3]),int(_parts[4])
                     strength = float(_parts[5]) if len(_parts) > 5 else 0.5
+                    brush    = int(_parts[6])   if len(_parts) > 6 else 2
                     if mirror:
                         x0,x1 = GRID_W-1-x0, GRID_W-1-x1
-                    cells = _bresenham_cells(x0,y0,x1,y1, brush=2)
+                    cells = _bresenham_cells(x0,y0,x1,y1, brush=brush)
                     _g = np.array(grid[:,:,5])
                     for (gy,gx) in cells:
                         _g[gy,gx] = strength
@@ -1298,7 +1408,19 @@ def run():
                     grid.__class__  # touch nonlocal
                     return _g, strength
 
-                if _brush == 'trail':
+                if _brush == 'node':
+                    # Register a routing node — corridor ch6 drawn between pairs.
+                    # Usage: node x y
+                    # ch6 corridor appears between each consecutive node pair.
+                    # RoutingNet reads ch6 corridor → writes ch5 path.
+                    if len(_parts) >= 3:
+                        nx, ny = int(_parts[1]), int(_parts[2])
+                        _routing_nodes.append((ny, nx))
+                        print(f"  [{_label}] node registered ({nx},{ny}) — total nodes: {len(_routing_nodes)}")
+                        if len(_routing_nodes) == 1:
+                            print(f"  [{_label}] drop a second node to form a path")
+
+                elif _brush == 'trail':
                     _g = np.array(grid[:,:,5])
                     if len(_parts) >= 5:
                         x0,y0,x1,y1 = int(_parts[1]),int(_parts[2]),int(_parts[3]),int(_parts[4])
@@ -1436,11 +1558,12 @@ def run():
                     print(f"  [{_label}] reset → {regime_names[regime_idx]}  f={_f:.4f} k={_k:.4f}")
 
                 elif _brush == 'shape':
-                    # shape circle/ring/spiral cx cy r
+                    # shape circle/ring/spiral cx cy r [strength]
                     # Also paints ch5 on the outline so organisms lock onto the shape
                     if len(_parts) >= 5:
                         shape_type = _parts[1]
                         cx,cy,r = int(_parts[2]),int(_parts[3]),int(_parts[4])
+                        shape_strength = float(_parts[5]) if len(_parts) > 5 else 0.8
                         _g_a  = np.array(grid[:,:,0])
                         _g_b  = np.array(grid[:,:,1])
                         _g_ch5 = np.array(grid[:,:,5])
@@ -1449,13 +1572,13 @@ def run():
                             if shape_type == 'circle':
                                 for (gy,gx) in _circle_cells(mcx,cy,r):
                                     _g_a[gy,gx] = 0.5; _g_b[gy,gx] = 0.5
-                                    _g_ch5[gy,gx] = 0.8; trail_mask[gy,gx] = 0.8
+                                    _g_ch5[gy,gx] = shape_strength; trail_mask[gy,gx] = shape_strength
                             elif shape_type == 'ring':
                                 for (gy,gx) in _circle_cells(mcx,cy,r):
                                     d = np.sqrt((gy-cy)**2+(gx-mcx)**2)
                                     if d >= r-3:
                                         _g_a[gy,gx] = 0.3; _g_b[gy,gx] = 0.6
-                                        _g_ch5[gy,gx] = 0.8; trail_mask[gy,gx] = 0.8
+                                        _g_ch5[gy,gx] = shape_strength; trail_mask[gy,gx] = shape_strength
                             elif shape_type == 'spiral':
                                 for angle in np.linspace(0, 4*np.pi, 300):
                                     rad = r * angle / (4*np.pi)

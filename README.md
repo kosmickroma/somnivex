@@ -44,6 +44,49 @@ Run: `python nca/run_free.py --physarum --artist --research` + `python nca/llm_b
 
 ---
 
+## LLM-NCA Mesh: Cross-Model Handoff Through Living Substrate (2026-03-22)
+
+**The short version:** Claude encoded a build task into a living NCA grid and disconnected. Gemini — a completely separate model from a different company, with zero conversation history and no access to Claude's session — read the grid and built the entire blueprint from scratch.
+
+**The mechanism:**
+- Claude (Anthropic) runs `--inject`: writes the entire blueprint as a dim ghost (ch5=0.15, 1px thin lines) into the NCA grid, saves a raw coordinate file (`ghost_commands.txt`), and exits
+- The NCA grid now carries two signals: the dim ghost (pending work) and nothing bright (nothing built yet)
+- Gemini (Google) runs `--build`: loads `ghost_commands.txt` for exact coordinates, reads the 16×16 ch5 heatmap each turn to see what's already built (bright=done, dim=pending), builds one element per turn
+- The NCA heatmap is the sole source of completion state — Gemini checks it every turn to decide what's left
+
+**What the terminal shows:**
+```
+MODEL : claude-haiku-4-5-20251001
+MODE  : INJECT — encoding blueprint into NCA, then disconnecting
+✓ CLAUDE — Blueprint injected into NCA. Job done. Disconnecting.
+---
+MODEL : gemini-2.5-flash
+MODE  : BUILD — task received from NCA grid
+HISTORY: 0 messages  |  no prior session context
+NCA handoff contains 63 raw commands, e.g.:
+  trail 48 12 48 372 0.8 2
+  trail 120 12 120 372 0.8 2
+  ...
+```
+
+**Why this matters:** Two frontier models from competing companies handed off a construction task through a living physical substrate. The NCA is not a database or a message queue — it's a running physics simulation. The handoff medium is alive. This is the first demonstrated case of cross-model task continuity mediated entirely by a neural cellular automaton.
+
+**The proof:** Different model IDs in the terminal. Claude's session fully closed before Gemini started. `ghost_commands.txt` contains only raw coordinates — no Claude reasoning, no context, no natural language. The NCA grid is the only thing connecting them.
+
+**How to run:**
+```bash
+# Terminal 1 — NCA substrate (keep running throughout)
+python nca/run_free.py --blueprint --research --grid 384
+
+# Terminal 2 — Claude encodes task into NCA, exits
+python nca/llm_bridge.py --blueprint --inject --provider anthropic --blueprint-file nca/blueprint_384.txt --grid 384
+
+# Terminal 2 — Gemini reads NCA, builds from scratch
+python nca/llm_bridge.py --blueprint --build --provider gemini --blueprint-file nca/blueprint_384.txt --grid 384
+```
+
+---
+
 ## Collaborative Blueprint Construction (2026-03-20)
 
 Two LLMs — Gemini 2.5 Flash and Claude Haiku — given an identical blueprint and told to build it. Neither knew the other existed. They communicated only through the grid.

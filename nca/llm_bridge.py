@@ -425,6 +425,10 @@ BRUSHES:
                                    sakura, fungal_glow, pollen_burst, terminal_amber, candy_chrome
   pulse x1 y1 x2 y2 [0.5]       — reinforce existing trail without redrawing
   mirror on/off                  — bilateral symmetry
+  node x y                       — drop a routing node (ROUTING MODE ONLY). Drop two nodes and
+                                   a pheromone corridor automatically forms between them.
+                                   Creatures will route along the path. Use when asked to
+                                   connect two points or create a routing path.
 
 Think like a painter — use curves and arcs to build organic forms: trees, waves, mountains, faces, creatures.
 Combine multiple curves and trails to build complex shapes. Geometry is just one option, not the default.
@@ -452,19 +456,133 @@ BLUEPRINT_FILE     = os.path.join(os.path.dirname(__file__), 'blueprint.txt')
 CMD_FILE_BLUEPRINT  = os.path.join(os.path.dirname(__file__), 'llm_commands_blueprint.txt')
 CMD_FILE_BLUEPRINT_B= os.path.join(os.path.dirname(__file__), 'llm_commands_blueprint_b.txt')
 
+# ── Blueprint session logging ──────────────────────────────────────────────────
+# Saves each turn's (input, heatmap, output) as JSONL for local model training.
+
+import json
+from datetime import datetime as _dt
+
+def _session_log_path():
+    ts = _dt.now().strftime('%Y%m%d_%H%M%S')
+    return os.path.join(LOG_DIR, f'blueprint_session_{ts}.jsonl')
+
+def _log_turn(log_path, turn, label, summary, output, done):
+    """Append one training example to the session JSONL log."""
+    hm_path = os.path.join(os.path.dirname(__file__), 'artist_heatmap.npy')
+    heatmap = []
+    try:
+        heatmap = np.load(hm_path).tolist()
+    except Exception:
+        pass
+    record = {
+        'session': os.path.basename(log_path),
+        'agent':   label,
+        'turn':    turn,
+        'input':   summary,
+        'heatmap': heatmap,
+        'output':  output,
+        'done':    done,
+    }
+    with open(log_path, 'a') as f:
+        f.write(json.dumps(record) + '\n')
+
+
+# ── Blueprint target injection (for --inject / --build mesh demo) ─────────────
+# Parses blueprint.txt and writes low-strength (0.15) ch5 markers at each
+# element's key coordinates. In the heatmap these show as dim cells (1-2).
+# Built trails (0.8) show as bright (7+). Fresh LLM session reads:
+#   dim = pending target, bright = already built.
+
+def make_build_prompt(grid_size=256):
+    cell_px = grid_size // 16
+    return f"""You are continuing a build task in a living NCA world. Grid: {grid_size}×{grid_size}.
+
+You will receive:
+  1. TASK LIST — the exact commands that make up the full blueprint
+  2. GRID STATE — a 16×16 heatmap showing what is already built
+
+Your job: execute every command in the TASK LIST that is NOT already built.
+To check if a command is built: compute which heatmap cells it passes through,
+check if those cells read 7 or higher. If yes → built, skip it.
+Each cell = {cell_px}×{cell_px} px.  col = floor(x/{cell_px}),  row = floor(y/{cell_px}).
+
+Each turn: issue ONE unbuilt command from the task list at strength 0.8.
+Issue DONE when every command in the task list is built.
+
+RESPOND EXACTLY:
+COMMANDS:
+<one command at strength 0.8 — OR DONE>
+SPEECH: <one sentence describing what you are building>"""
+
+BUILD_SYSTEM_PROMPT = make_build_prompt(256)  # default, overridden at runtime
+
+
+def _parse_blueprint_targets(blueprint_text):
+    """Extract full blueprint commands for dim injection.
+    Returns (dim_targets, original_commands):
+      dim_targets      — commands at 0.15 strength, brush=0 (thin ghost for heatmap)
+      original_commands — commands at full strength (saved to ghost_commands.txt for Session 2)"""
+    dim_targets = []
+    original_commands = []
+    for line in blueprint_text.splitlines():
+        line = line.strip()
+        if not line or line.startswith('#') or line.startswith('BLUEPRINT'):
+            continue
+        parts = line.split()
+        if not parts:
+            continue
+        cmd = parts[0].lower()
+        try:
+            if cmd == 'trail' and len(parts) >= 5:
+                x1, y1, x2, y2 = int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4])
+                strength = float(parts[5]) if len(parts) > 5 else 0.8
+                dim_targets.append(f'trail {x1} {y1} {x2} {y2} 0.15 0')
+                original_commands.append(f'trail {x1} {y1} {x2} {y2} {strength} 2')
+            elif cmd == 'shape' and len(parts) >= 4:
+                dim_targets.append(' '.join(parts) + ' 0.15')
+                original_commands.append(' '.join(parts))  # full strength (no explicit param = 0.8)
+            elif cmd == 'blob' and len(parts) >= 3:
+                dim_targets.append(f'blob {parts[1]} {parts[2]} 0.15')
+                original_commands.append(f'blob {parts[1]} {parts[2]} 0.8')
+        except (ValueError, IndexError):
+            pass
+    return dim_targets, original_commands
+
+
+GHOST_COMMANDS_FILE = os.path.join(os.path.dirname(__file__), 'ghost_commands.txt')
+
+def _inject_blueprint_targets(targets, cmd_file, original_commands):
+    """Write full blueprint at dim strength (0.15) so the ghost of the entire
+    plan is visible in the heatmap. Also saves ghost_commands.txt — the exact
+    command list Session 2 reads to know WHAT to build (NCA grid tells it WHAT IS DONE)."""
+    if targets:
+        with open(cmd_file, 'w') as f:
+            f.write('COMMANDS:\n' + '\n'.join(targets) + '\n')
+    with open(GHOST_COMMANDS_FILE, 'w') as f:
+        f.write('\n'.join(original_commands) + '\n')
+    print(f"  Blueprint encoded into NCA grid ({len(targets)} elements as dim ghost)")
+    print(f"  Task list saved → ghost_commands.txt ({len(original_commands)} commands)")
+
 # ── Blueprint system prompt ────────────────────────────────────────────────────
 
-SYSTEM_PROMPT_BLUEPRINT = """You are a builder working on a 256×256 grid with living organisms.
+def make_blueprint_prompt(grid_size=256):
+    cell_px   = grid_size // 16
+    max_coord = grid_size - 1
+    cx_formula = f"x = col*{cell_px}+{cell_px//2}"
+    cy_formula = f"y = row*{cell_px}+{cell_px//2}"
+    return f"""You are a builder working on a {grid_size}×{grid_size} grid with living organisms.
 Your job is to execute a blueprint — a set of lines defined as coordinates.
-Grid: (0,0)=top-left, (255,255)=bottom-right. x increases RIGHT, y increases DOWN.
+Grid: (0,0)=top-left, ({max_coord},{max_coord})=bottom-right. x increases RIGHT, y increases DOWN.
 
 You receive the blueprint and the current trail map every turn.
-The trail map is a 16×16 grid where each cell = a 16×16 pixel block. 0=no trail, 9=full trail.
-Cell center coords: x = col*16+8,  y = row*16+8.
+The trail map is a 16×16 grid where each cell = a {cell_px}×{cell_px} pixel block. 0=no trail, 9=full trail.
+To find which cell a coordinate (x,y) falls in: col = floor(x / {cell_px}),  row = floor(y / {cell_px}).
+Example: coordinate ({cell_px*3},{cell_px*2}) → col=3, row=2.
 
 YOUR ONLY JOB: build the blueprint one line at a time. Each turn, look at the trail map,
-find a blueprint line that is NOT yet built, and draw it. If a line is already showing
-on the trail map (cells along its path read 7 or higher), skip it and pick the next missing one.
+find a blueprint line that is NOT yet built, and draw it. To check if a trail is built:
+compute the cells it passes through using floor(x/{cell_px}) and floor(y/{cell_px}) — if those cells
+read 7 or higher, it is built — skip it. Pick the next unbuilt one.
 When all lines are built, issue DONE.
 
 Do NOT add anything not in the blueprint. Do not improvise extra shapes beyond what is listed.
@@ -474,7 +592,7 @@ Draw at strength 0.8 for permanent trails.
 BRUSHES (only what you need):
   trail x1 y1 x2 y2 0.8 1        — straight line, strength 0.8, width 1 (thin)
   curve x1 y1 bx by x2 y2 0.8 1  — curved line through control point (bx,by)
-  shape ring cx cy r              — drawn circle outline as pheromone trail, e.g. shape ring 128 128 6
+  shape ring cx cy r              — drawn circle outline as pheromone trail
 
 RESPOND EXACTLY in this format:
 COMMANDS:
@@ -482,6 +600,8 @@ COMMANDS:
 SPEECH: <one sentence: which element you are drawing, or "Blueprint complete." if done>
 
 When all lines are built put DONE on its own line inside COMMANDS. Do not put a trail command when done."""
+
+SYSTEM_PROMPT_BLUEPRINT = make_blueprint_prompt(256)  # default, overridden at runtime
 
 
 # ── Artist ch5 spatial summary ────────────────────────────────────────────────
@@ -501,11 +621,14 @@ PALETTE_DESCRIPTIONS = {
 
 _prev_heatmap = None  # module-level: tracks last heatmap for diff
 
-def _spatial_map(_rows):
+
+def _spatial_map(_rows, grid_size=256):
     """16×16 ch5 heatmap from artist_heatmap.npy (written every frame by run_free.py).
-    Each cell = max ch5 in a 16×16 block of the 256×256 grid (0=no trail, 9=full trail).
+    Each cell = max ch5 in a (grid_size//16 × grid_size//16) pixel block.
     Also shows which cells changed since last turn."""
     global _prev_heatmap
+
+    cell_px = grid_size // 16
 
     _hm_path = os.path.join(os.path.dirname(__file__), 'artist_heatmap.npy')
     try:
@@ -523,20 +646,24 @@ def _spatial_map(_rows):
             for c in range(16):
                 delta = int(scaled[r, c]) - int(prev_scaled[r, c])
                 if abs(delta) >= 2:
-                    cx, cy = c * 16 + 8, r * 16 + 8
+                    cx = c * cell_px
+                    cy = r * cell_px
                     changed_cells.append(f"({cx},{cy}){'+' if delta > 0 else ''}{delta}")
 
     _prev_heatmap = heatmap.copy()
 
     # Format grid — rows = y (top→bottom), cols = x (left→right)
-    lines = ["  Trail map (ch5): 0=no trail  9=full trail  each cell = 16×16 px  TOP=low y  LEFT=low x"]
-    lines.append("  Col→  0123456789ABCDEF  (x: 8,24,40...248)")
+    x_starts = ','.join(str(c * cell_px) for c in range(0, 6)) + '...'
+    lines = [f"  Trail map (ch5): 0=no trail  9=full trail  each cell = {cell_px}×{cell_px} px  TOP=low y  LEFT=low x"]
+    lines.append(f"  Col→  0123456789ABCDEF  (x: {x_starts})")
     for r in range(16):
-        cy = r * 16 + 8
+        cy = r * cell_px
         row_str = ''.join(str(scaled[r, c]) for c in range(16))
         lines.append(f"  R{r:02d} y={cy:3d}: {row_str}")
-    lines.append("  Cell(row,col) center: x = col*16+8,  y = row*16+8")
-    lines.append("  Example: R04 col 6 → trail cx=104 cy=72")
+    lines.append(f"  Cell coords: x = col*{cell_px},  y = row*{cell_px}  (cell-boundary, NOT center)")
+    cx_ex = 6 * cell_px
+    cy_ex = 4 * cell_px
+    lines.append(f"  Example: R04 col 6 → trail starting at x={cx_ex} y={cy_ex}")
 
     if changed_cells:
         lines.append(f"  New trail activity this turn: {', '.join(changed_cells[:24])}")
@@ -546,7 +673,7 @@ def _spatial_map(_rows):
     return '\n'.join(lines)
 
 
-def format_artist_summary(rows, current_palette='unknown'):
+def format_artist_summary(rows, current_palette='unknown', grid_size=256):
     """Extended summary for artist including ch5 activity and palette info."""
     base = format_summary(rows)
     if not rows:
@@ -571,7 +698,7 @@ def format_artist_summary(rows, current_palette='unknown'):
     lines.append(f"Trail signal (ch5): {ch5:.5f}  {'trails holding' if trail_active else 'no trails — organisms have nowhere to go'}")
 
     # Spatial map
-    smap = _spatial_map(rows)
+    smap = _spatial_map(rows, grid_size=grid_size)
     if smap:
         lines.append(smap)
 
@@ -774,12 +901,40 @@ async def run_artist(verbose=False, dry_run=False, provider='gemini', model=None
 
 # ── Blueprint mode loop ───────────────────────────────────────────────────────
 
-async def _blueprint_agent(label, call_llm, cmd_file, blueprint_text, dry_run=False):
-    """Single blueprint-building agent loop. Runs until DONE."""
+async def _blueprint_agent(label, call_llm, cmd_file, blueprint_text,
+                           dry_run=False, build=False, inject=False, log_path=None, grid_size=256):
+    """Single blueprint-building agent loop. Runs until DONE.
+    inject=True: lay dim target markers into grid, save ghost_commands.txt, then exit (Session 1).
+    build=True: load ghost_commands.txt + read NCA heatmap, build remaining elements (Session 2).
+    log_path: JSONL file to save training data each turn."""
     with open(cmd_file, 'w') as f:
         f.write('none')
 
     history = []
+    turn    = 0
+
+    # Build mode: load task list from ghost_commands.txt written by inject session
+    ghost_task_list = None
+    if build:
+        if os.path.exists(GHOST_COMMANDS_FILE):
+            ghost_task_list = open(GHOST_COMMANDS_FILE).read().strip()
+            print(f"  [NCA] Task received — {ghost_task_list.count(chr(10))+1} commands loaded from NCA handoff")
+        else:
+            print(f"  [NCA] WARNING: no handoff found — run inject session first")
+
+    # Inject mode: write dim ghost into NCA grid, save task list, then exit
+    if inject and blueprint_text:
+        dim_targets, original_commands = _parse_blueprint_targets(blueprint_text)
+        await asyncio.sleep(2)  # let run_free.py start
+        _inject_blueprint_targets(dim_targets, cmd_file, original_commands)
+        await asyncio.sleep(ARTIST_STEPS / 60)  # wait for markers to land
+        with open(cmd_file, 'w') as f:
+            f.write('none')
+        print(f"")
+        print(f"  ✓ CLAUDE — Blueprint injected into NCA. Job done. Disconnecting.")
+        print(f"  ✓ The NCA grid now carries the plan. Start Gemini with --build to execute it.")
+        print(f"{'═'*40}")
+        return
 
     while True:
         await asyncio.sleep(ARTIST_STEPS / 60)
@@ -792,21 +947,34 @@ async def _blueprint_agent(label, call_llm, cmd_file, blueprint_text, dry_run=Fa
 
         rows = read_recent_rows(csv_path)
         if not rows:
+            print(f"  [{label}] CSV found but no rows yet — waiting...")
             await asyncio.sleep(3)
             continue
 
-        summary = format_artist_summary(rows, current_palette='unknown')
-        user_content = (
-            f"BLUEPRINT:\n{blueprint_text}\n\n"
-            f"CURRENT GRID STATE:\n{summary}\n\n"
-            f"Draw one unbuilt element from the blueprint. Check the trail map — "
-            f"if a line/blob's cells already read 7+ it is built, pick a different one. "
-            f"Issue DONE when all elements are visible on the trail map."
-        )
+        summary = format_artist_summary(rows, current_palette='unknown', grid_size=grid_size)
+
+        # Show heatmap so we can see what Gemini sees
+        print(f"  [{label}] turn {turn+1} — calling API...")
+
+        if build:
+            user_content = (
+                f"TASK LIST:\n{ghost_task_list}\n\n"
+                f"GRID STATE:\n{summary}\n\n"
+                f"Pick one unbuilt command and issue it at strength 0.8. Issue DONE when all are built."
+            )
+        else:
+            user_content = (
+                f"BLUEPRINT:\n{blueprint_text}\n\n"
+                f"CURRENT GRID STATE:\n{summary}\n\n"
+                f"Draw one unbuilt element from the blueprint. Check the trail map — "
+                f"if a line/blob's cells already read 7+ it is built, pick a different one. "
+                f"Issue DONE when all elements are visible on the trail map."
+            )
 
         history.append({"role": "user", "content": user_content})
         if len(history) > MAX_HISTORY * 2:
             history = history[-(MAX_HISTORY * 2):]
+        turn += 1
 
         if dry_run:
             print(f"  [{label}] dry-run — no API call")
@@ -814,10 +982,12 @@ async def _blueprint_agent(label, call_llm, cmd_file, blueprint_text, dry_run=Fa
 
         try:
             reply = await call_llm(history)
+            print(f"  [{label}] reply: {reply[:200].strip()}")
             history.append({"role": "assistant", "content": reply})
 
             commands = []
             in_block = False
+            VALID_BRUSHES = ('trail', 'curve', 'shape', 'blob', 'wipe', 'done')
             for line in reply.strip().splitlines():
                 line = line.strip()
                 if line.lower().startswith('commands:'):
@@ -826,8 +996,10 @@ async def _blueprint_agent(label, call_llm, cmd_file, blueprint_text, dry_run=Fa
                 if line.lower().startswith('speech:'):
                     in_block = False
                     continue
-                if in_block and line and not line.startswith('#'):
-                    commands.append(line)
+                if line and not line.startswith('#'):
+                    # Accept if inside COMMANDS block OR if line starts with a known brush
+                    if in_block or any(line.lower().startswith(b) for b in VALID_BRUSHES):
+                        commands.append(line)
 
             is_done         = any(c.strip().upper() == 'DONE' for c in commands)
             active_commands = [c for c in commands if c.strip().upper() != 'DONE']
@@ -835,6 +1007,11 @@ async def _blueprint_agent(label, call_llm, cmd_file, blueprint_text, dry_run=Fa
             if active_commands:
                 with open(cmd_file, 'w') as f:
                     f.write('COMMANDS:\n' + '\n'.join(active_commands) + '\n')
+
+            # Log turn for training data collection
+            if log_path:
+                _log_turn(log_path, turn, label, summary,
+                          '\n'.join(active_commands), is_done)
 
             if is_done:
                 print(f"  [{label}]  Blueprint complete. Disconnecting.")
@@ -860,12 +1037,17 @@ async def _blueprint_agent(label, call_llm, cmd_file, blueprint_text, dry_run=Fa
             print(f"  [{label}] API error: {e}")
 
 
-async def run_blueprint(dry_run=False, provider='gemini', model=None):
-    """Blueprint builder. Run one per terminal — gemini uses file A, anthropic uses file B."""
+async def run_blueprint(dry_run=False, provider='gemini', model=None,
+                        build=False, inject=False, blueprint_file=None, grid_size=256):
+    """Blueprint builder. Run one per terminal — gemini uses file A, anthropic uses file B.
+    inject=True: encode blueprint as dim ghost into NCA grid, save task list, then exit (Session 1).
+    build=True: load task list from NCA handoff, use heatmap for completion state (Session 2).
+    blueprint_file: override default blueprint.txt path."""
+    bp_path = blueprint_file or BLUEPRINT_FILE
     try:
-        raw = open(BLUEPRINT_FILE).read()
+        raw = open(bp_path).read()
     except FileNotFoundError:
-        print(f"ERROR: {BLUEPRINT_FILE} not found.")
+        print(f"ERROR: {bp_path} not found.")
         return
 
     blueprint_lines = [l for l in raw.splitlines() if l.strip() and not l.strip().startswith('#')]
@@ -880,14 +1062,37 @@ async def run_blueprint(dry_run=False, provider='gemini', model=None):
 
     if model is None:
         model = DEFAULT_MODELS_BLUEPRINT[provider]
+
+    system = make_build_prompt(grid_size) if build else make_blueprint_prompt(grid_size)
     call_llm = (make_gemini_client if provider == 'gemini' else make_anthropic_client)(
-        model, SYSTEM_PROMPT_BLUEPRINT, max_tokens=400)
+        model, system, max_tokens=400)
+
+    log_path = _session_log_path()
+    os.makedirs(LOG_DIR, exist_ok=True)
 
     print(f"{'═'*40}")
-    print(f"  {label} — BLUEPRINT MODE")
+    if inject:
+        print(f"  MODEL : {model}")
+        print(f"  MODE  : INJECT — encoding blueprint into NCA, then disconnecting")
+        print(f"  OUTPUT: ghost_commands.txt (raw coordinates only, no LLM context)")
+    elif build:
+        print(f"  MODEL : {model}")
+        print(f"  MODE  : BUILD — task received from NCA grid")
+        print(f"  HISTORY: 0 messages  |  no prior session context")
+        if os.path.exists(GHOST_COMMANDS_FILE):
+            lines = open(GHOST_COMMANDS_FILE).read().strip().splitlines()
+            print(f"  NCA handoff contains {len(lines)} raw commands, e.g.:")
+            for l in lines[:3]:
+                print(f"    {l}")
+            print(f"    ...")
+    else:
+        print(f"  MODEL : {model}")
+        print(f"  MODE  : BLUEPRINT")
     print(f"{'═'*40}")
 
-    await _blueprint_agent(label, call_llm, cmd_file, blueprint_text, dry_run)
+    await _blueprint_agent(label, call_llm, cmd_file, blueprint_text,
+                           dry_run=dry_run, build=build, inject=inject,
+                           log_path=log_path, grid_size=grid_size)
 
 
 # ── Main async loop ───────────────────────────────────────────────────────────
@@ -1032,6 +1237,14 @@ if __name__ == '__main__':
                         help='Artist mode: human-in-the-loop painter')
     parser.add_argument('--blueprint', action='store_true',
                         help='Blueprint mode: autonomous builder from blueprint.txt')
+    parser.add_argument('--build',     action='store_true',
+                        help='Build mode: read task from NCA grid handoff, no prior context (Session 2 of mesh demo)')
+    parser.add_argument('--inject',    action='store_true',
+                        help='Inject mode: lay dim target markers into grid then build (Session 1 of mesh demo)')
+    parser.add_argument('--blueprint-file', type=str, default=None,
+                        help='Override blueprint file path (e.g. nca/blueprint_512.txt)')
+    parser.add_argument('--grid', type=int, default=256,
+                        help='Grid size matching run_free.py --grid (default 256). Fixes heatmap cell math for larger grids.')
     args = parser.parse_args()
 
     if args.artist:
@@ -1046,6 +1259,10 @@ if __name__ == '__main__':
             dry_run=args.dry_run,
             provider=args.provider,
             model=args.model,
+            build=args.build,
+            inject=args.inject,
+            blueprint_file=args.blueprint_file,
+            grid_size=args.grid,
         ))
     else:
         asyncio.run(run(

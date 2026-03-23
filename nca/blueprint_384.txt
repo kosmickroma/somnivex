@@ -1,0 +1,86 @@
+# Blueprint: PCB Trace Network — 384x384
+# LLM A (Gemini) — horizontal power rails + edge stubs + via rings
+# LLM B (Claude) — vertical signal trunks + junction rings at every intersection
+#
+# 5x5 grid of traces. Rails at y=32,80,128,176,224. Trunks at x=32,80,128,176,224.
+# Covers most of the 256x256 canvas (8px margin).
+# Rings drawn with shape ring = pheromone trail circle outline (not blob stamps)
+
+BLUEPRINT: PCB Trace Network — 384x384
+
+# LLM A — horizontal power rails (full width)
+trail 12 48 372 48 0.8 1
+trail 12 120 372 120 0.8 1
+trail 12 192 372 192 0.8 1
+trail 12 264 372 264 0.8 1
+trail 12 336 372 336 0.8 1
+
+# LLM A — edge stubs (short runs off the rails to edges)
+trail 12 48 12 84 0.8 1
+trail 12 120 12 156 0.8 1
+trail 372 192 372 228 0.8 1
+trail 372 264 372 300 0.8 1
+trail 12 336 12 372 0.8 1
+trail 372 48 372 12 0.8 1
+
+# LLM A — vertical connector stubs between rails
+trail 84 48 84 120 0.8 1
+trail 300 120 300 192 0.8 1
+trail 84 192 84 264 0.8 1
+trail 300 264 300 336 0.8 1
+trail 228 48 228 120 0.8 1
+trail 156 192 156 264 0.8 1
+
+# LLM A — pad rings at edge stub endpoints
+shape ring 12 84 8
+shape ring 12 156 8
+shape ring 372 228 8
+shape ring 372 300 8
+shape ring 12 372 8
+shape ring 372 12 8
+
+# LLM B — vertical signal trunks (full height)
+trail 48 12 48 372 0.8 1
+trail 120 12 120 372 0.8 1
+trail 192 12 192 372 0.8 1
+trail 264 12 264 372 0.8 1
+trail 336 12 336 372 0.8 1
+
+# LLM B — via rings at all 25 rail/trunk intersections
+shape ring 48 48 9
+shape ring 120 48 9
+shape ring 192 48 9
+shape ring 264 48 9
+shape ring 336 48 9
+shape ring 48 120 9
+shape ring 120 120 9
+shape ring 192 120 9
+shape ring 264 120 9
+shape ring 336 120 9
+shape ring 48 192 9
+shape ring 120 192 9
+shape ring 192 192 9
+shape ring 264 192 9
+shape ring 336 192 9
+shape ring 48 264 9
+shape ring 120 264 9
+shape ring 192 264 9
+shape ring 264 264 9
+shape ring 336 264 9
+shape ring 48 336 9
+shape ring 120 336 9
+shape ring 192 336 9
+shape ring 264 336 9
+shape ring 336 336 9
+
+# LLM B — small rings at trunk top/bottom endpoints
+shape ring 48 12 6
+shape ring 120 12 6
+shape ring 192 12 6
+shape ring 264 12 6
+shape ring 336 12 6
+shape ring 48 372 6
+shape ring 120 372 6
+shape ring 192 372 6
+shape ring 264 372 6
+shape ring 336 372 6

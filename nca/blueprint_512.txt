@@ -1,0 +1,198 @@
+# Blueprint: Dense PCB — 512×512, 10×10 grid
+# LLM A (Gemini) — horizontal rails + edge pads
+# LLM B (Claude) — vertical trunks + junction rings
+#
+# 10×10 grid. Rails at y=46,92,138,184,230,276,322,368,414,460
+# Trunks at x=46,92,138,184,230,276,322,368,414,460
+# 100 junction rings, 20 full-length traces, tight spacing.
+
+BLUEPRINT: Dense PCB 512 10x10
+
+# LLM A — horizontal rails (full width)
+trail 8 46 504 46 0.8 1
+trail 8 92 504 92 0.8 1
+trail 8 138 504 138 0.8 1
+trail 8 184 504 184 0.8 1
+trail 8 230 504 230 0.8 1
+trail 8 276 504 276 0.8 1
+trail 8 322 504 322 0.8 1
+trail 8 368 504 368 0.8 1
+trail 8 414 504 414 0.8 1
+trail 8 460 504 460 0.8 1
+
+# LLM A — left edge stubs (every other rail)
+trail 8 46 8 69 0.8 1
+trail 8 138 8 161 0.8 1
+trail 8 230 8 253 0.8 1
+trail 8 322 8 345 0.8 1
+trail 8 414 8 437 0.8 1
+
+# LLM A — right edge stubs (alternating)
+trail 504 92 504 115 0.8 1
+trail 504 184 504 207 0.8 1
+trail 504 276 504 299 0.8 1
+trail 504 368 504 391 0.8 1
+trail 504 460 504 483 0.8 1
+
+# LLM A — short vertical connectors between adjacent rails
+trail 23 46 23 92 0.8 1
+trail 69 92 69 138 0.8 1
+trail 115 138 115 184 0.8 1
+trail 161 184 161 230 0.8 1
+trail 207 230 207 276 0.8 1
+trail 253 276 253 322 0.8 1
+trail 299 322 299 368 0.8 1
+trail 345 368 345 414 0.8 1
+trail 391 414 391 460 0.8 1
+trail 437 46 437 92 0.8 1
+trail 483 92 483 138 0.8 1
+trail 23 276 23 322 0.8 1
+trail 437 276 437 322 0.8 1
+
+# LLM A — edge pad rings
+shape ring 8 69 4
+shape ring 8 161 4
+shape ring 8 253 4
+shape ring 8 345 4
+shape ring 8 437 4
+shape ring 504 115 4
+shape ring 504 207 4
+shape ring 504 299 4
+shape ring 504 391 4
+shape ring 504 483 4
+
+# LLM B — vertical trunks (full height)
+trail 46 8 46 504 0.8 1
+trail 92 8 92 504 0.8 1
+trail 138 8 138 504 0.8 1
+trail 184 8 184 504 0.8 1
+trail 230 8 230 504 0.8 1
+trail 276 8 276 504 0.8 1
+trail 322 8 322 504 0.8 1
+trail 368 8 368 504 0.8 1
+trail 414 8 414 504 0.8 1
+trail 460 8 460 504 0.8 1
+
+# LLM B — junction rings at all 100 intersections
+shape ring 46 46 4
+shape ring 92 46 4
+shape ring 138 46 4
+shape ring 184 46 4
+shape ring 230 46 4
+shape ring 276 46 4
+shape ring 322 46 4
+shape ring 368 46 4
+shape ring 414 46 4
+shape ring 460 46 4
+shape ring 46 92 4
+shape ring 92 92 4
+shape ring 138 92 4
+shape ring 184 92 4
+shape ring 230 92 4
+shape ring 276 92 4
+shape ring 322 92 4
+shape ring 368 92 4
+shape ring 414 92 4
+shape ring 460 92 4
+shape ring 46 138 4
+shape ring 92 138 4
+shape ring 138 138 4
+shape ring 184 138 4
+shape ring 230 138 4
+shape ring 276 138 4
+shape ring 322 138 4
+shape ring 368 138 4
+shape ring 414 138 4
+shape ring 460 138 4
+shape ring 46 184 4
+shape ring 92 184 4
+shape ring 138 184 4
+shape ring 184 184 4
+shape ring 230 184 4
+shape ring 276 184 4
+shape ring 322 184 4
+shape ring 368 184 4
+shape ring 414 184 4
+shape ring 460 184 4
+shape ring 46 230 4
+shape ring 92 230 4
+shape ring 138 230 4
+shape ring 184 230 4
+shape ring 230 230 4
+shape ring 276 230 4
+shape ring 322 230 4
+shape ring 368 230 4
+shape ring 414 230 4
+shape ring 460 230 4
+shape ring 46 276 4
+shape ring 92 276 4
+shape ring 138 276 4
+shape ring 184 276 4
+shape ring 230 276 4
+shape ring 276 276 4
+shape ring 322 276 4
+shape ring 368 276 4
+shape ring 414 276 4
+shape ring 460 276 4
+shape ring 46 322 4
+shape ring 92 322 4
+shape ring 138 322 4
+shape ring 184 322 4
+shape ring 230 322 4
+shape ring 276 322 4
+shape ring 322 322 4
+shape ring 368 322 4
+shape ring 414 322 4
+shape ring 460 322 4
+shape ring 46 368 4
+shape ring 92 368 4
+shape ring 138 368 4
+shape ring 184 368 4
+shape ring 230 368 4
+shape ring 276 368 4
+shape ring 322 368 4
+shape ring 368 368 4
+shape ring 414 368 4
+shape ring 460 368 4
+shape ring 46 414 4
+shape ring 92 414 4
+shape ring 138 414 4
+shape ring 184 414 4
+shape ring 230 414 4
+shape ring 276 414 4
+shape ring 322 414 4
+shape ring 368 414 4
+shape ring 414 414 4
+shape ring 460 414 4
+shape ring 46 460 4
+shape ring 92 460 4
+shape ring 138 460 4
+shape ring 184 460 4
+shape ring 230 460 4
+shape ring 276 460 4
+shape ring 322 460 4
+shape ring 368 460 4
+shape ring 414 460 4
+shape ring 460 460 4
+
+# LLM B — top/bottom endpoint rings
+shape ring 46 8 3
+shape ring 92 8 3
+shape ring 138 8 3
+shape ring 184 8 3
+shape ring 230 8 3
+shape ring 276 8 3
+shape ring 322 8 3
+shape ring 368 8 3
+shape ring 414 8 3
+shape ring 460 8 3
+shape ring 46 504 3
+shape ring 92 504 3
+shape ring 138 504 3
+shape ring 184 504 3
+shape ring 230 504 3
+shape ring 276 504 3
+shape ring 322 504 3
+shape ring 368 504 3
+shape ring 414 504 3
+shape ring 460 504 3

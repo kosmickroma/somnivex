@@ -9,6 +9,86 @@ A compact NCA (17,000 parameters) trained simultaneously on three incompatible L
 
 ---
 
+## AmI: Trained NCA Signal Routing — Two Signals, Two AIs, One Substrate (2026-03-23)
+
+**The short version:** A neural cellular automaton was trained from scratch to route two different signal types to two different output zones. You type a topic. The NCA reads the signal shape, routes it through the grid, and the correct AI fires — Claude for politics, Gemini for climate. The routing is not keyword matching in Python. It is learned behavior in the substrate.
+
+**What was built:**
+
+Three-zone grid: Zone A (input/watcher, left), Zone B (Claude zone, top-right), Zone C (Gemini zone, bottom-right). Two signal shapes: horizontal bar for politics signals, vertical bar for climate signals. The NCA must route each shape to the correct zone.
+
+The full chain:
+```
+You type "researching AI in politics"
+    ↓
+watcher.py detects topic → classifies intent → generates UUID signal_id
+    ↓
+ami_trigger.json written: {signal_type: "politics", signal_id: "abc123"}
+    ↓
+experiment_nca.py reads trigger → injects horizontal bar into Zone A of NCA grid
+    ↓
+Trained NCA runs — hidden channels carry routing information across grid
+    ↓
+Zone B (top-right) activates above threshold → zone_state.json written with signal_id
+    ↓
+responder.py verifies signal_id match → calls Claude
+    ↓
+Claude research brief appears in ami/results.txt
+```
+
+**The routing grammar that emerged:**
+
+After training, hidden channel analysis revealed what the NCA developed internally:
+- **ch1** — emerges as a climate routing marker. Near-zero for politics, 4x higher for climate, spatially concentrated in Zone C. Nobody designed this. It came from training pressure.
+- **ch3** — politics signal marker, concentrated in Zone A input zone
+- **ch4** — zone suppression channel, suppresses wrong destination zone
+
+These tokens are not visible in the display. They live in channels 1-10, propagating cell-to-cell through local neighborhood rules.
+
+**What was proven:**
+- Politics signal → Zone B → Claude: B=0.134 avg across 16 test states ✓
+- Climate signal → Zone C → Gemini: C=0.151 avg across 16 test states ✓
+- Signal_id chain enforces honest routing — responder cannot fire before signal physically travels through the NCA
+
+**Training details:**
+- Base checkpoint: `physarum_100000.pkl` (already knows tunnel-building and path-finding)
+- New channels: CH_ZONE (re-injected every step — spatial identity), CH_SIGNAL (re-injected every step — signal type hint)
+- Loss: trail prediction + routing loss (wrong zone activated = penalized) + persistence loss
+- 20,000 steps, pool-based multi-step rollout (12 steps), 64×64 grid
+- Routing loss drops from 0.017 → near zero by step 300, stable thereafter
+
+**Key architectural decision (see ami/DECISIONS.md):**
+We tried training without CH_SIGNAL first — forcing the NCA to infer signal type from trail shape alone (horizontal vs vertical Sobel gradients). It failed: the NCA suppressed both zones rather than routing selectively. With CH_SIGNAL re-injected as a uniform hint, the NCA learned to route reliably. The routing grammar still had to emerge — CH_SIGNAL tells it what to route, the hidden channels figure out how.
+
+**How to run:**
+```bash
+# Terminal 1 — NCA substrate (start first, resets state files)
+python ami/experiment_nca.py
+
+# Terminal 2 — file watcher
+python ami/watcher.py
+
+# Terminal 3 — LLM responder
+python ami/responder.py
+
+# Terminal 4 — trigger
+echo "" > ami/input.txt && sleep 2 && echo "researching AI in politics" > ami/input.txt
+# or:
+echo "" > ami/input.txt && sleep 2 && echo "researching climate tech" > ami/input.txt
+```
+
+**Key files:**
+- `ami/experiment_nca.py` — NCA routing substrate (replaces Physarum sim)
+- `ami/train_routing.py` — training script
+- `ami/analyze_routing.py` — hidden channel grammar analysis
+- `ami/physarum_core.py` — shared physics, zone layout, signal injection
+- `ami/watcher.py` — file watcher, intent classification, signal_id generation
+- `ami/responder.py` — zone activation monitor, Claude/Gemini caller
+- `ami/DECISIONS.md` — architectural decisions and why we made them
+- `ami/routing_checkpoints/routing_020000.pkl` — trained checkpoint
+
+---
+
 ## LLM-NCA Hybrid: Persistent Programs in a Living Substrate (2026-03-19)
 
 **The short version:** An LLM painted "KK ✕" in living organisms on a neural cellular automaton. When the LLM was disconnected, the composition kept running on its own.

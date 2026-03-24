@@ -1,7 +1,12 @@
 # ami/responder.py
 #
-# Monitors ami/ami_trigger.json.
-# When a new topic signal arrives, calls Claude, writes results.
+# Monitors zone_state.json for NCA routing events.
+#
+# Zone B activated (politics signal routed) → calls Claude
+# Zone C activated (climate signal routed)  → calls Gemini
+#
+# Claude fires ONLY after signal_id in zone_state matches trigger signal_id.
+# This proves the signal physically traveled through the NCA substrate.
 #
 # Run:
 #   python ami/responder.py
@@ -9,18 +14,21 @@
 import time
 import json
 import anthropic
+from google import genai as genai_new
+import os
 from pathlib import Path
 from datetime import datetime
 
-TRIGGER_FILE = Path("ami/ami_trigger.json")
-ZONE_STATE   = Path("ami/zone_state.json")
-RESULTS_FILE = Path("ami/results.txt")
+TRIGGER_FILE  = Path("ami/ami_trigger.json")
+ZONE_STATE    = Path("ami/zone_state.json")
+RESULTS_FILE  = Path("ami/results.txt")
 
+
+# ── API clients ───────────────────────────────────────────────────────────────
 
 def call_claude(topic):
     client = anthropic.Anthropic()
     print(f"  [responder] Calling Claude for: '{topic}'")
-
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=1024,
@@ -39,11 +47,34 @@ def call_claude(topic):
     return response.content[0].text
 
 
-def write_results(topic, content):
+def call_gemini(topic):
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        return "[Gemini] No API key found — set GEMINI_API_KEY or GOOGLE_API_KEY"
+    client = genai_new.Client(api_key=api_key)
+    print(f"  [responder] Calling Gemini for: '{topic}'")
+    prompt = (
+        f"The user is researching: {topic}\n\n"
+        f"Give them:\n"
+        f"1. A one-sentence summary of where this topic stands right now\n"
+        f"2. 3-4 key developments or angles worth knowing\n"
+        f"3. 2-3 specific things worth searching for\n\n"
+        f"Be concise and useful. No fluff."
+    )
+    response = client.models.generate_content(
+        model="gemini-2.5-flash", contents=prompt
+    )
+    return response.text
+
+
+# ── Result writing ────────────────────────────────────────────────────────────
+
+def write_results(topic, api_name, zone, content):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     divider   = "=" * 60
     result    = f"\n{divider}\n"
     result   += f"TOPIC : {topic}\n"
+    result   += f"API   : {api_name} (routed to Zone {zone})\n"
     result   += f"TIME  : {timestamp}\n"
     result   += f"{divider}\n"
     result   += content
@@ -56,17 +87,19 @@ def write_results(topic, content):
     print(f"  [responder] Written to {RESULTS_FILE}")
 
 
+# ── Main loop ─────────────────────────────────────────────────────────────────
+
 def main():
     RESULTS_FILE.touch()
-    print("[responder] Started — watching NCA zone B for activation")
-    print(f"[responder] Results will appear in ami/results.txt")
+    print("[responder] Started — watching NCA zone activations")
+    print("[responder] Zone B → Claude  |  Zone C → Gemini")
+    print(f"[responder] Results → {RESULTS_FILE}")
     print()
 
     last_signal_id = None
 
     while True:
         try:
-            # Need both files to exist
             if not TRIGGER_FILE.exists() or not ZONE_STATE.exists():
                 time.sleep(0.5)
                 continue
@@ -74,53 +107,60 @@ def main():
             trigger = json.loads(TRIGGER_FILE.read_text())
             state   = json.loads(ZONE_STATE.read_text())
 
-            # Skip if already consumed
             if trigger.get("consumed"):
                 time.sleep(0.5)
                 continue
 
-            topic     = trigger.get("topic")
-            signal_id = trigger.get("signal_id")
+            topic       = trigger.get("topic")
+            signal_id   = trigger.get("signal_id")
+            signal_type = trigger.get("signal_type", "politics")
 
             if not topic or not signal_id:
                 time.sleep(0.5)
                 continue
 
-            # Skip if we already handled this signal
             if signal_id == last_signal_id:
                 time.sleep(0.5)
                 continue
 
-            # Wait for NCA to physically route this signal through the substrate.
-            # zone_b_activated must be True AND the signal_id in zone_state must
-            # match the signal_id from the trigger. This proves Zone B activated
-            # because of THIS signal traveling through the NCA — not stale state.
-            zone_b_activated    = state.get("zone_b_activated", False)
-            zone_state_id       = state.get("signal_id")
-            zone_b_val          = state.get("zone_b", 0)
+            # Check which zone activated and whether IDs match
+            zone_b_activated = state.get("zone_b_activated", False)
+            zone_c_activated = state.get("zone_c_activated", False)
+            zone_state_id    = state.get("signal_id")
+            zone_state_type  = state.get("signal_type")
 
-            if not zone_b_activated:
+            neither_activated = not zone_b_activated and not zone_c_activated
+            if neither_activated:
                 time.sleep(0.5)
                 continue
 
+            # Signal ID must match — proves this activation is from THIS signal
             if zone_state_id != signal_id:
-                # zone_b_activated is True but from a different signal — stale state
-                print(f"  [responder] Waiting — zone_state signal_id mismatch "
-                      f"(got {str(zone_state_id)[:8] if zone_state_id else 'None'}, "
-                      f"want {str(signal_id)[:8]})")
+                print(f"  [responder] Waiting — ID mismatch "
+                      f"(state={str(zone_state_id)[:8] if zone_state_id else 'None'} "
+                      f"want={str(signal_id)[:8]})")
                 time.sleep(0.5)
                 continue
 
-            # IDs match — Zone B activated because this signal traveled through the NCA
-            print(f"\n  [responder] Signal {str(signal_id)[:8]}... reached Zone B={zone_b_val:.3f}")
-            print(f"  [responder] Topic: '{topic}'")
-
+            # Mark consumed before calling API
             trigger["consumed"] = True
             TRIGGER_FILE.write_text(json.dumps(trigger, indent=2))
             last_signal_id = signal_id
 
-            result = call_claude(topic)
-            write_results(topic, result)
+            # Route to correct API based on which zone activated
+            if zone_b_activated:
+                zone_b_val = state.get("zone_b", 0)
+                print(f"\n  [responder] Zone B activated ({zone_b_val:.3f}) — "
+                      f"signal {str(signal_id)[:8]}... → Claude")
+                result = call_claude(topic)
+                write_results(topic, "Claude", "B", result)
+
+            elif zone_c_activated:
+                zone_c_val = state.get("zone_c", 0)
+                print(f"\n  [responder] Zone C activated ({zone_c_val:.3f}) — "
+                      f"signal {str(signal_id)[:8]}... → Gemini")
+                result = call_gemini(topic)
+                write_results(topic, "Gemini", "C", result)
 
         except KeyboardInterrupt:
             print("\n[responder] stopped")

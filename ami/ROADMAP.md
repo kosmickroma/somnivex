@@ -9,56 +9,71 @@ Don't build the deep version first. Prove the plumbing works. See what it feels 
 
 ---
 
-## Phase 0 — Prove One Connection End To End
+## Phase 0 — Prove One Connection End To End ✓ DONE (2026-03-23)
 
-**Goal:** One sensor → NCA signal → one action. Nothing more.
+**Goal:** One sensor → NCA signal → one action.
 
-Pick ONE of these:
-- [ ] **Writing trigger**: File watcher sees keyword in notepad → injects signal into NCA zone → scraper fires → articles returned
-- [ ] **Calendar trigger**: Calendar watcher sees upcoming meeting → signal propagates → relevant file surfaces → notification fires
+- [x] File watcher sees keyword → classifies intent → injects signal into NCA → LLM fires
+- [x] Signal_id UUID chain enforces honest routing — LLM cannot fire before signal physically travels through NCA
+- [x] Two signal types (politics → Claude, climate → Gemini) both working reliably end to end
 
-**Why this first:** If the plumbing doesn't work nothing else matters. Keep it stupid simple. A file watcher, a signal injection, a scraper call. 20 lines of Python per piece.
+**What was built:**
+- `watcher.py` — watches input.txt, classifies intent, fires signal with UUID
+- `experiment_nca.py` — trained NCA substrate, reads trigger, routes signal, writes zone state
+- `responder.py` — watches zone state, verifies signal_id, calls correct API
 
-**Success criteria:** You type a header in a text file. Without touching anything else, relevant content appears somewhere you can see it.
-
-**Questions to answer:**
-- File watcher or screen OCR? (depends on where you type)
-- Which zone of the current NCA grid becomes the "writing" zone?
-- What does "signal injection" look like in practice — same ch5 mechanism or new channel?
-- Does the current checkpoint work for this or do we need a routing head on top?
+**Proven:** "researching AI in politics" → Claude fires. "researching climate tech" → Gemini fires.
 
 ---
 
-## Phase 1 — Multiple Zones, Multiple Sensors
+## Phase 1 — Routing Grammar Emerges ✓ DONE (2026-03-23)
 
-**Goal:** At least 3 zones doing 3 different things simultaneously.
+**Goal:** Train a new NCA to route signals — routing logic in the physics, not bolted on.
 
-- [ ] Writing zone (notepad watcher)
-- [ ] Calendar zone (calendar API or file)
-- [ ] Research zone (scrapers / RSS)
+- [x] Three-zone grid design (Zone A input, Zone B Claude, Zone C Gemini)
+- [x] Two signal shapes (horizontal bar = politics, vertical bar = climate)
+- [x] Training pipeline: pool-based rollout, routing loss, persistence loss
+- [x] NCA trained from physarum_100000.pkl — 20,000 steps
+- [x] Routing grammar analyzed — ch1 emerges as climate routing token, ch3 as politics marker
+- [x] Both signals routing correctly above threshold (B=0.134 politics, C=0.151 climate avg across 16 test states)
 
-**Questions to answer:**
-- How do zones stay independent? (spatial separation in the grid? channel separation?)
-- What happens when two zones activate at the same time — do they interfere?
-- Does the NCA naturally keep them separate or do we need to enforce boundaries?
+**The research question was answered:** Yes, routing grammar emerges from signal tension. ch1 and ch3 developed as internal routing tokens — nobody designed them. They appeared because the training pressure demanded a way to distinguish signal types.
 
----
-
-## Phase 2 — Emergent Routing Grammar
-
-**Goal:** Train a new NCA specifically for routing where the routing logic IS the physics, not bolted on top.
-
-- [ ] Define the two incompatible signal types to create tension
-- [ ] Design training data: what does "intent signal" look like spatially? what does "data signal" look like?
-- [ ] Train from scratch (or from existing checkpoint)
-- [ ] k-means cluster the hidden channels after training
-- [ ] Read the vocabulary that emerged — what tokens did it invent?
-
-**This is the research question:** Does routing grammar emerge from signal tension the same way physics grammar emerged from incompatible physics teachers?
+**Checkpoint:** `ami/routing_checkpoints/routing_020000.pkl`
+**Analysis:** run `python ami/analyze_routing.py`
+**Decisions log:** `ami/DECISIONS.md`
 
 ---
 
-## Phase 3 — LLM As Optional Layer
+## Phase 2 — Richer Signals, More Zones (NEXT)
+
+**Goal:** More than two intent types. More than two output zones.
+
+- [ ] Add a third signal type and third output zone
+- [ ] Test whether routing generalizes to a signal type not seen in training
+- [ ] Richer watcher: detect more intent types from writing context, not just keyword lists
+- [ ] Screen watcher: detect intent from what's visible on screen, not just what's typed in a file
+- [ ] Log every routing event as future training data
+
+**Open questions:**
+- Does the routing NCA generalize to a third intent type it never saw in training?
+- What's the minimum signal difference the NCA can reliably distinguish?
+- Can we train more signal types and have the grammar stay coherent?
+
+---
+
+## Phase 3 — Substrate Persistence & Self-Repair
+
+**Goal:** Grid stays alive indefinitely without hacks.
+
+- [ ] Current hack: blending base trail every 50 steps to keep grid alive — needs a proper fix
+- [ ] Train NCA to maintain its own substrate without external injection
+- [ ] Test: kill signal mid-route. Does routing resume when signal returns?
+- [ ] Self-repair: if zone connection breaks, does trail rebuild the same way Physarum reroutes?
+
+---
+
+## Phase 4 — LLM As Optional Layer
 
 **Goal:** LLM only wakes up when something actually needs reasoning.
 
@@ -69,22 +84,19 @@ Pick ONE of these:
 
 ---
 
-## Phase 4 — It Feels Alive
+## Phase 5 — It Feels Alive
 
 **Goal:** Use it every day. It anticipates. It doesn't ask.
 
 - [ ] Connect to actual calendar
-- [ ] Connect to actual files
-- [ ] Connect to actual writing environment
+- [ ] Connect to actual files and writing environment
 - [ ] Run for a week. Note every moment it does something useful you didn't ask for.
 
 ---
 
 ## Open Questions (parking lot)
 
-- How do you encode text as a spatial signal the NCA can learn from? (embedding → channel injection?)
-- Is the current lenia_100000.pkl checkpoint sufficient for Phase 0 or do we need a routing head?
-- What's the right way to define zone boundaries in the grid?
-- If routing grammar emerges — who reads it? LLM? Another NCA? Does it route itself?
-- How do you train on "intent signals" when intent is fuzzy and context-dependent?
+- How do you encode richer text intent as a spatial signal the NCA can learn from? (embedding → channel injection?)
+- If routing grammar emerges for 3+ signal types — does the vocabulary stay interpretable?
 - Multi-modal eventually? Screen + audio + calendar + files all injecting simultaneously?
+- The substrate persistence problem: NCA collapses to zero in free-run. Is that a training problem or architecture?
